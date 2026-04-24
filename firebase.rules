@@ -1,0 +1,80 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function ownsExisting() {
+      return signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    function ownsIncoming() {
+      return signedIn() && request.resource.data.userId == request.auth.uid;
+    }
+
+    function ownsTrip(tripId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/trips/$(tripId))
+        && get(/databases/$(database)/documents/trips/$(tripId)).data.userId == request.auth.uid;
+    }
+
+    match /users/{userId} {
+      allow read, write: if signedIn() && userId == request.auth.uid;
+    }
+
+    match /userPreferences/{userId} {
+      allow read, write: if signedIn() && userId == request.auth.uid;
+    }
+
+    match /trips/{tripId} {
+      allow read, update, delete: if ownsExisting();
+      allow create: if ownsIncoming();
+    }
+
+    match /tripDays/{dayId} {
+      allow read, update, delete: if ownsExisting() && ownsTrip(resource.data.tripId);
+      allow create: if ownsIncoming() && ownsTrip(request.resource.data.tripId);
+    }
+
+    match /tripWarnings/{warningId} {
+      allow read, update, delete: if ownsExisting() && ownsTrip(resource.data.tripId);
+      allow create: if ownsIncoming() && ownsTrip(request.resource.data.tripId);
+    }
+
+    match /replanProposals/{proposalId} {
+      allow read, update, delete: if ownsExisting() && ownsTrip(resource.data.tripId);
+      allow create: if ownsIncoming() && ownsTrip(request.resource.data.tripId);
+    }
+
+    match /tripChatThreads/{threadId} {
+      allow read, update, delete: if ownsExisting() && ownsTrip(resource.data.tripId);
+      allow create: if ownsIncoming() && ownsTrip(request.resource.data.tripId);
+    }
+
+    match /tripChatMessages/{messageId} {
+      allow read, update, delete: if ownsExisting() && ownsTrip(resource.data.tripId);
+      allow create: if ownsIncoming() && ownsTrip(request.resource.data.tripId);
+    }
+
+    match /savedLocalScenarios/{scenarioId} {
+      allow read, update, delete: if ownsExisting();
+      allow create: if ownsIncoming();
+    }
+
+    match /validationSnapshots/{snapshotId} {
+      allow read, update, delete: if ownsExisting() && ownsTrip(resource.data.tripId);
+      allow create: if ownsIncoming() && ownsTrip(request.resource.data.tripId);
+    }
+
+    match /completionHistory/{historyId} {
+      allow read, update, delete: if ownsExisting() && ownsTrip(resource.data.tripId);
+      allow create: if ownsIncoming() && ownsTrip(request.resource.data.tripId);
+    }
+
+    match /travelMemories/{memoryId} {
+      allow read, update, delete: if ownsExisting();
+      allow create: if ownsIncoming();
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "wandermint",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b",
+    "lint:types": "rg \"\\bany\\b\" src && exit 1 || exit 0",
+    "firebase": "NODE_NO_WARNINGS=1 NO_UPDATE_NOTIFIER=1 firebase",
+    "firebase:login": "NODE_NO_WARNINGS=1 NO_UPDATE_NOTIFIER=1 firebase login",
+    "firebase:secret:openai": "NODE_NO_WARNINGS=1 NO_UPDATE_NOTIFIER=1 firebase functions:secrets:set OPENAI_API_KEY",
+    "deploy": "npm run build && npm --prefix functions run build && NODE_NO_WARNINGS=1 NO_UPDATE_NOTIFIER=1 firebase deploy --only hosting,firestore,functions",
+    "deploy:hosting": "npm run build && NODE_NO_WARNINGS=1 NO_UPDATE_NOTIFIER=1 firebase deploy --only hosting"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.11.4",
+    "@emotion/styled": "^11.11.5",
+    "@mui/icons-material": "^5.15.20",
+    "@mui/material": "^5.15.20",
+    "@tanstack/react-query": "^5.40.1",
+    "@tanstack/react-router": "^1.36.2",
+    "dayjs": "^1.11.11",
+    "firebase": "^10.12.2",
+    "i18next": "^23.11.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-i18next": "^14.1.2",
+    "zod": "^3.23.8",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.4.5",
+    "firebase-tools": "^15.15.0",
+    "vite": "^5.2.13"
+  }
+}
