@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "test": "vitest run",
-    "lint:types": "rg \"\\bany\\b\" src && exit 1 || exit 0",
+    "lint:types": "git grep -lE '\\bany\\b' -- '*.ts' '*.tsx' >/dev/null 2>&1 && exit 1 || exit 0",
     "firebase": "NODE_NO_WARNINGS=1 NO_UPDATE_NOTIFIER=1 firebase",
     "firebase:login": "NODE_NO_WARNINGS=1 NO_UPDATE_NOTIFIER=1 firebase login",
     "firebase:secret:openai": "NODE_NO_WARNINGS=1 NO_UPDATE_NOTIFIER=1 firebase functions:secrets:set OPENAI_API_KEY",
