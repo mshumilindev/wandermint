@@ -71,10 +71,12 @@ import { buildMusicPlanningSignals, getEnabledMusicPersonalization } from "../pe
 import type { WizardAccommodationBase } from "../accommodation/accommodationTypes";
 import { resolveTripOptionCountFromDraft } from "./tripOptionCountService";
 import { isDestinationLocationAvoided, mergePreferenceProfile } from "../preferences/preferenceConstraintsService";
-import type { FlightSegment } from "../flights/flightTypes";
+import type { FlightSegment, LayoverContext } from "../flights/flightTypes";
 import type { FoodPreference } from "../food/foodPreferenceTypes";
 import type { TripPlace } from "../places/placeTypes";
 import type { SegmentTransportNodes } from "../transport/transportNodeTypes";
+import { buildPlanningContextWidgets } from "../../features/planning-context/planningContextBuilder";
+import { resolvePlanningLocations } from "../../features/planning-context/resolvePlanningLocations";
 
 export type TripGenerationServiceResult = GeneratedTripOptions & {
   travelBehaviorUiHintKeys: string[];
@@ -205,6 +207,10 @@ export interface TripDraft {
   /** Structured inbound (to destination) / outbound (return) legs for flight-aware prompts. */
   inboundFlight?: FlightSegment;
   outboundFlight?: FlightSegment;
+  /** Raw user input for lookup parser. */
+  flightLookupInput?: string;
+  /** Structured lookup + layover analysis for AI/context widgets. */
+  layoverContext?: LayoverContext;
 }
 
 const sortEventsByStart = (events: NonNullable<Trip["anchorEvents"]>): NonNullable<Trip["anchorEvents"]> =>
@@ -711,6 +717,19 @@ export const tripGenerationService = {
     assertTripDraftSatisfiesAvoidConstraints(generationDraft);
     const primarySegment = generationDraft.tripSegments[0];
     const primaryLocation = primarySegment ? `${primarySegment.city}, ${primarySegment.country}` : generationDraft.destination;
+    const openDataPlanningContext = await buildPlanningContextWidgets({
+      flow: "create_plan",
+      locations: resolvePlanningLocations("create_plan", {
+        segments: generationDraft.tripSegments.map((segment) => ({
+          id: segment.id,
+          city: segment.city,
+          country: segment.country,
+        })),
+      }),
+      startDate: generationDraft.dateRange.start,
+      endDate: generationDraft.dateRange.end,
+      budgetAmount: generationDraft.budget.amount,
+    }).catch(() => null);
     callbacks?.onStep?.("checking_forecast");
     const forecast = await publicWeatherProvider.getForecast(primaryLocation, generationDraft.dateRange).catch((error) => {
       debugLogError("trip_generation_forecast_fallback", error);
@@ -831,6 +850,7 @@ export const tripGenerationService = {
       const prompt = buildTripGenerationPrompt(draftForAi, forecast, destinationDiscovery, {
         tripOptionPlan,
         accommodationSummary,
+        planningContextOpenData: openDataPlanningContext ?? undefined,
       });
       callbacks?.onStep?.("asking_ai");
       const gatewayDraft: TripDraft = { ...draftForAi };
@@ -848,6 +868,7 @@ export const tripGenerationService = {
       const generated = await openAiGatewayClient.generateTripOptions({
         draft: gatewayDraft,
         prompt,
+        planningContext: openDataPlanningContext ?? undefined,
         forecast,
         places: placesForAi,
         destinationDiscovery,

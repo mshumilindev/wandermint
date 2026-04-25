@@ -1,10 +1,13 @@
 import type { ActivityBlock } from "../../entities/activity/model";
+import type { TravelMemory } from "../../entities/travel-memory/model";
 import type { Trip } from "../../entities/trip/model";
+import { isTravelMemoryEligibleForAggregates } from "../travel-stats/travelMemoryTripEquivalence";
 import { countBucketPlacesDeduped, countVisitedBucketPlacesDeduped } from "../bucket-list/bucketListDedupe";
 import { bucketListRepository } from "../bucket-list/bucketListRepository";
 import { buildCompletedTripForTripReviewFromDayPlans } from "../trip-review/buildCompletedTripFromDayPlans";
 import { analyzeCompletedTrip } from "../trip-review/tripReviewCalculator";
 import { tripDaysRepository } from "../../services/firebase/repositories/tripDaysRepository";
+import { travelMemoriesRepository } from "../../services/firebase/repositories/travelMemoriesRepository";
 import { tripsRepository } from "../../services/firebase/repositories/tripsRepository";
 import { nowIso } from "../../services/firebase/timestampMapper";
 import { ACHIEVEMENT_DEFINITIONS } from "./achievement.definitions";
@@ -32,7 +35,7 @@ export type CompletedTripMetricRow = {
   travelDelayDayCount: number;
 };
 
-/** Deterministic inputs derived only from stored trips, day plans, and bucket list rows. */
+/** Deterministic inputs from stored trips, day plans, bucket list rows, and travel-memory backfills. */
 export type UserAchievementMetrics = {
   doneVisitCount: number;
   doneVisitCountByCategory: Record<string, number>;
@@ -156,16 +159,22 @@ const resolveAffectedKeys = (context: AchievementEvaluationContext): Set<string>
   return keys;
 };
 
-const collectTripDerivedMetrics = async (trips: Trip[], needs: MetricNeeds): Promise<Partial<UserAchievementMetrics>> => {
+const collectTripDerivedMetrics = async (
+  trips: Trip[],
+  needs: MetricNeeds,
+  travelMemories: readonly TravelMemory[],
+): Promise<Partial<UserAchievementMetrics>> => {
   const partial: Partial<UserAchievementMetrics> = {};
+  const memoryEligible = travelMemories.filter(isTravelMemoryEligibleForAggregates);
+  const memoryTripAdds = memoryEligible.length;
 
   if (needs.tripStatuses && !needs.dayScan && !needs.perTripMetrics) {
-    partial.completedTripsCount = trips.filter((t) => t.status === "completed").length;
+    partial.completedTripsCount = trips.filter((t) => t.status === "completed").length + memoryTripAdds;
     return partial;
   }
 
   if (needs.tripStatuses) {
-    partial.completedTripsCount = trips.filter((t) => t.status === "completed").length;
+    partial.completedTripsCount = trips.filter((t) => t.status === "completed").length + memoryTripAdds;
   }
 
   let doneVisitCount = 0;
@@ -236,6 +245,29 @@ const collectTripDerivedMetrics = async (trips: Trip[], needs: MetricNeeds): Pro
     }
   }
 
+  for (const mem of memoryEligible) {
+    if (needs.dayScan) {
+      citiesWithDone.add(norm(mem.city));
+      countriesWithDone.add(norm(mem.country));
+      doneVisitCount += 1;
+      const ck = normCategory(mem.style);
+      doneVisitCountByCategory[ck] = (doneVisitCountByCategory[ck] ?? 0) + 1;
+      categoryUniverse.add(ck);
+      if (mem.style === "food") {
+        foodRelatedDoneVisits += 1;
+      }
+    }
+    if (needs.perTripMetrics) {
+      perTripRows.push({
+        completionRate: 1,
+        averageStartDelayMinutes: 0,
+        delaySampleCount: 0,
+        travelDelayDayCount: 0,
+      });
+      bestSingle = Math.max(bestSingle, 1);
+    }
+  }
+
   if (needs.dayScan) {
     partial.doneVisitCount = doneVisitCount;
     partial.doneVisitCountByCategory = doneVisitCountByCategory;
@@ -253,7 +285,12 @@ const collectTripDerivedMetrics = async (trips: Trip[], needs: MetricNeeds): Pro
   return partial;
 };
 
-const loadMetricsWithTrips = async (userId: string, trips: Trip[], needs: MetricNeeds): Promise<UserAchievementMetrics> => {
+const loadMetricsWithTrips = async (
+  userId: string,
+  trips: Trip[],
+  needs: MetricNeeds,
+  travelMemories: readonly TravelMemory[],
+): Promise<UserAchievementMetrics> => {
   const out = emptyMetrics();
   if (!needs.tripStatuses && !needs.dayScan && !needs.perTripMetrics && !needs.bucket) {
     return out;
@@ -262,7 +299,7 @@ const loadMetricsWithTrips = async (userId: string, trips: Trip[], needs: Metric
   const needsTrips = needs.tripStatuses || needs.dayScan || needs.perTripMetrics;
   const tripsForScan = needsTrips ? trips : [];
 
-  Object.assign(out, await collectTripDerivedMetrics(tripsForScan, needs));
+  Object.assign(out, await collectTripDerivedMetrics(tripsForScan, needs, travelMemories));
 
   if (needs.bucket) {
     const rows = await bucketListRepository.listByUserId(userId);
@@ -274,17 +311,29 @@ const loadMetricsWithTrips = async (userId: string, trips: Trip[], needs: Metric
 };
 
 const loadMetrics = async (userId: string, needs: MetricNeeds): Promise<UserAchievementMetrics> => {
-  const trips = await tripsRepository.getUserTrips(userId);
-  return loadMetricsWithTrips(userId, trips, needs);
+  const uid = userId.trim();
+  const trips = await tripsRepository.getUserTrips(uid);
+  const needsTrips = needs.tripStatuses || needs.dayScan || needs.perTripMetrics;
+  const memories = needsTrips
+    ? await travelMemoriesRepository.getUserTravelMemories(uid).catch(() => [] as TravelMemory[])
+    : [];
+  return loadMetricsWithTrips(uid, trips, needs, memories);
 };
 
 /**
  * Full trip- and bucket-derived aggregates for analytics (no achievement definitions required).
- * Pass `trips` when you already loaded the user’s trips to avoid a duplicate fetch.
+ * Pass `trips` / `travelMemories` when you already loaded them to avoid duplicate fetches.
  */
-export const loadAchievementAnalyticsMetrics = async (userId: string, trips?: Trip[]): Promise<UserAchievementMetrics> => {
-  const resolved = trips ?? (await tripsRepository.getUserTrips(userId));
-  return loadMetricsWithTrips(userId, resolved, { tripStatuses: true, dayScan: true, perTripMetrics: true, bucket: true });
+export const loadAchievementAnalyticsMetrics = async (
+  userId: string,
+  trips?: Trip[],
+  travelMemories?: TravelMemory[],
+): Promise<UserAchievementMetrics> => {
+  const uid = userId.trim();
+  const resolvedTrips = trips ?? (await tripsRepository.getUserTrips(uid));
+  const resolvedMemories =
+    travelMemories ?? (await travelMemoriesRepository.getUserTravelMemories(uid).catch(() => [] as TravelMemory[]));
+  return loadMetricsWithTrips(uid, resolvedTrips, { tripStatuses: true, dayScan: true, perTripMetrics: true, bucket: true }, resolvedMemories);
 };
 
 const evaluateOneCondition = (condition: AchievementCondition, m: UserAchievementMetrics): EvaluatedAchievementState => {

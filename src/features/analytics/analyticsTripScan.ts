@@ -1,5 +1,7 @@
 import type { ActivityBlock } from "../../entities/activity/model";
+import type { TravelMemory } from "../../entities/travel-memory/model";
 import type { Trip } from "../../entities/trip/model";
+import { isTravelMemoryEligibleForAggregates, syntheticTripIdFromMemoryId } from "../travel-stats/travelMemoryTripEquivalence";
 import { tripDaysRepository } from "../../services/firebase/repositories/tripDaysRepository";
 import type { TripReviewDocument } from "../../services/firebase/repositories/tripReviewsRepository";
 import {
@@ -10,6 +12,23 @@ import {
 import { buildCompletedTripForTripReviewFromDayPlans } from "../trip-review/buildCompletedTripFromDayPlans";
 import { analyzeCompletedTrip, type CategoryRollup } from "../trip-review/tripReviewCalculator";
 import type { StyleAxisKey, TripAnalyticsScanResult, TripAnalyticsTripRow, TripPlanItemRollup } from "./analytics.types";
+
+const memoryStyleToStyleAxis = (style: TravelMemory["style"]): StyleAxisKey => {
+  switch (style) {
+    case "food":
+      return "food";
+    case "culture":
+      return "culture";
+    case "nature":
+      return "nature";
+    case "nightlife":
+      return "nightlife";
+    case "rest":
+    case "mixed":
+    default:
+      return "custom";
+  }
+};
 
 const TRIP_DONE: Trip["status"][] = ["completed", "partially_completed"];
 
@@ -72,7 +91,11 @@ const mergeCategoryRollup = (into: Map<string, CategoryRollup>, next: CategoryRo
   });
 };
 
-export const scanTripAnalyticsData = async (trips: Trip[], tripReviews: TripReviewDocument[]): Promise<TripAnalyticsScanResult> => {
+export const scanTripAnalyticsData = async (
+  trips: Trip[],
+  tripReviews: TripReviewDocument[],
+  travelMemories: readonly TravelMemory[] = [],
+): Promise<TripAnalyticsScanResult> => {
   const reviewDelayByTripId = new Map(tripReviews.map((d) => [d.tripId, d.review.averageDelayMinutes]));
 
   const eligible = trips.filter((t) => TRIP_DONE.includes(t.status)).sort((a, b) => a.dateRange.end.localeCompare(b.dateRange.end));
@@ -176,6 +199,39 @@ export const scanTripAnalyticsData = async (trips: Trip[], tripReviews: TripRevi
       actualPace,
       countriesThisTrip: [...countriesThisTrip],
       citiesThisTrip: [...citiesThisTrip],
+    });
+  }
+
+  for (const mem of travelMemories) {
+    if (!isTravelMemoryEligibleForAggregates(mem)) {
+      continue;
+    }
+    const axis = memoryStyleToStyleAxis(mem.style);
+    styleDone[axis] += 1;
+    const tripId = syntheticTripIdFromMemoryId(mem.id);
+    const cityN = norm(mem.city.trim());
+    const countryN = norm(mem.country.trim());
+    rollups.push({
+      tripId,
+      tripEndDate: mem.endDate,
+      plannedItems: 1,
+      completedItems: 1,
+      skippedItems: 0,
+    });
+    tripRows.push({
+      tripId,
+      tripTitle: mem.geoLabel?.trim() || `${mem.city.trim()}, ${mem.country.trim()}`,
+      tripEndDate: mem.endDate,
+      plannedItems: 1,
+      completedItems: 1,
+      skippedItems: 0,
+      completionRate: 1,
+      reviewDelayMinutes: null,
+      analyzedDelayMinutes: 0,
+      selectedPace: "balanced",
+      actualPace: "balanced",
+      countriesThisTrip: [countryN],
+      citiesThisTrip: [cityN],
     });
   }
 

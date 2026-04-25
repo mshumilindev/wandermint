@@ -1,4 +1,5 @@
 import { buildHomeSuggestionContext } from "./homeTripSuggestionContextBuilder";
+import { enrichHomeSuggestedTrips } from "./homeTripSuggestionEnrichment";
 import { refineTripSuggestions } from "./homeTripSuggestionAiLayer";
 import { buildCuratedFallbackSuggestions, scoreHomeTripSuggestions } from "./homeTripSuggestionScoring";
 import type { HomeTripSuggestionCandidate, SuggestedTrip } from "./homeTripSuggestionTypes";
@@ -30,7 +31,22 @@ export type HomeTripSuggestionResult = {
 export const getHomeTripSuggestions = async (userId: string): Promise<HomeTripSuggestionResult> => {
   const uid = userId.trim();
   if (!uid) {
-    return { suggestions: stripScore(buildCuratedFallbackSuggestions()), usedFallback: true, storyInspirations: [] };
+    const raw = stripScore(buildCuratedFallbackSuggestions());
+    const enriched = await enrichHomeSuggestedTrips(raw, {
+      userId: "guest",
+      travelBehavior: null,
+      tripHistory: [],
+      flickSync: { topTitles: [], topMediaTypes: [], interestSignals: [] },
+      music: null,
+      budget: { avgDailySpend: null, minDaily: null, maxDaily: null, currency: "USD", dominantStyle: "balanced" },
+      bucketList: { rows: [], savedDestinations: [], savedActivities: [] },
+      preferenceProfile: { avoid: [], prefer: [] },
+      lastTripDate: null,
+      tasteConfidence: 0,
+      personalizationAllowed: false,
+      accountPreferences: null,
+    });
+    return { suggestions: enriched, usedFallback: true, storyInspirations: [] };
   }
 
   const ctx = await buildHomeSuggestionContext(uid);
@@ -43,7 +59,9 @@ export const getHomeTripSuggestions = async (userId: string): Promise<HomeTripSu
   let usedFallback = false;
 
   if (suggestions.length === 0) {
-    return { suggestions: stripScore(buildCuratedFallbackSuggestions(ctx.budget.currency)), usedFallback: true, storyInspirations };
+    const raw = stripScore(buildCuratedFallbackSuggestions(ctx.budget.currency));
+    const enriched = await enrichHomeSuggestedTrips(raw, ctx);
+    return { suggestions: enriched, usedFallback: true, storyInspirations };
   }
 
   if (isSignalThin(ctx) && suggestions.length < 3) {
@@ -62,5 +80,6 @@ export const getHomeTripSuggestions = async (userId: string): Promise<HomeTripSu
     }
   }
 
-  return { suggestions: suggestions.slice(0, 5), usedFallback, storyInspirations };
+  const enriched = await enrichHomeSuggestedTrips(suggestions.slice(0, 5), ctx);
+  return { suggestions: enriched, usedFallback, storyInspirations };
 };

@@ -1,6 +1,6 @@
 import i18next from "../../i18n/i18n";
 import { useTripsStore } from "../../app/store/useTripsStore";
-import { useUiStore } from "../../app/store/useUiStore";
+import { useUiStore, type UiAchievementToast } from "../../app/store/useUiStore";
 import { debugLogError } from "../../shared/lib/errors";
 import { invalidateTravelAnalyticsCache } from "../analytics/analyticsRepository";
 import { evaluateAchievements, evaluateAllAchievementsForUser } from "./achievementEngine";
@@ -10,6 +10,22 @@ import { isUserAchievementTrackingEnabled } from "./achievementTrackingGate";
 export { ACHIEVEMENT_CATALOG, ACHIEVEMENT_DEFINITIONS, evaluateAchievements, evaluateAllAchievementsForUser } from "./achievementEngine";
 
 export { isUserAchievementTrackingEnabled } from "./achievementTrackingGate";
+
+const toSingleAchievementToast = (notice: AchievementUnlockNotice, tripLabel?: string): UiAchievementToast => ({
+  kind: "single",
+  title: notice.title,
+  description: notice.description,
+  category: notice.category,
+  iconKey: notice.icon,
+  ...(tripLabel ? { tripLabel } : {}),
+});
+
+const toBatchAchievementToast = (notices: AchievementUnlockNotice[], tripLabel?: string): UiAchievementToast => ({
+  kind: "batch",
+  count: notices.length,
+  previewTitles: notices.slice(0, 2).map((n) => n.title),
+  ...(tripLabel ? { tripLabel } : {}),
+});
 
 /** One toast per evaluation run; trip lifecycle uses a trip-scoped summary when anything unlocks. */
 const pushUnlockToasts = (unlocked: AchievementUnlockNotice[], options?: { tripLabel?: string }): void => {
@@ -25,6 +41,7 @@ const pushUnlockToasts = (unlocked: AchievementUnlockNotice[], options?: { tripL
         pushToast({
           message: i18next.t("achievements.afterTripUnlockOne", { trip: tripLabel, title: first.title }),
           tone: "success",
+          achievement: toSingleAchievementToast(first, tripLabel),
         });
       }
       return;
@@ -32,6 +49,7 @@ const pushUnlockToasts = (unlocked: AchievementUnlockNotice[], options?: { tripL
     pushToast({
       message: i18next.t("achievements.afterTripUnlockMany", { trip: tripLabel, count: unlocked.length }),
       tone: "success",
+      achievement: toBatchAchievementToast(unlocked, tripLabel),
     });
     return;
   }
@@ -41,6 +59,7 @@ const pushUnlockToasts = (unlocked: AchievementUnlockNotice[], options?: { tripL
       pushToast({
         message: i18next.t("achievements.unlockedToast", { title: first.title }),
         tone: "success",
+        achievement: toSingleAchievementToast(first),
       });
     }
     return;
@@ -48,6 +67,7 @@ const pushUnlockToasts = (unlocked: AchievementUnlockNotice[], options?: { tripL
   pushToast({
     message: i18next.t("achievements.unlockedManyToast", { count: unlocked.length }),
     tone: "success",
+    achievement: toBatchAchievementToast(unlocked),
   });
 };
 

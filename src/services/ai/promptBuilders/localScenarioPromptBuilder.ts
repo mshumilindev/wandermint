@@ -1,4 +1,6 @@
 import type { RightNowExploreSpeed } from "../../../entities/user/model";
+import type { RightNowSocialContext } from "../../../entities/friend/model";
+import type { PlanningContextWidgetModel } from "../../../features/planning-context/planningContext.types";
 import type { WeatherContext } from "../../providers/contracts";
 import type { PlanningContext } from "../../planning/planningContextBuilder";
 
@@ -86,8 +88,27 @@ export const buildLocalScenarioPrompt = (
   exploreSpeed: RightNowExploreSpeed = "balanced",
   foodCultureAppendix?: string,
   storyTravelAppendix?: string,
+  socialContext?: RightNowSocialContext,
+  openDataPlanningContext?: PlanningContextWidgetModel,
 ): string => {
   const bounds = getRightNowBlockBounds(availableMinutes, exploreSpeed);
+  const socialLines =
+    !socialContext || socialContext.mode === "solo"
+      ? ["Social context: solo mode. Optimize around the user's location and current city."]
+      : [
+          `Social context: ${socialContext.mode} mode with ${socialContext.participantCount} participants.`,
+          `Participants: ${socialContext.participants
+            .map((p) => `${p.name} (${p.location.city}${p.location.country ? `, ${p.location.country}` : ""})`)
+            .join("; ")}`,
+          `Location strategy: ${socialContext.locationStrategy.preferred}; citywide detours allowed: ${socialContext.locationStrategy.allowCitywideInterestingDetours ? "yes" : "no"}.`,
+          "Balance convenience and interestingness across participants.",
+          "Treat midpoint as a soft preference, not a hard constraint.",
+          "Prefer compact routes when possible.",
+          "If suggesting a non-midpoint area, explain why it is worth it.",
+          "Avoid over-optimizing only for distance if better options exist nearby.",
+          "Consider group size when choosing venues and activities.",
+          "For groups, prefer flexible places that work for multiple people.",
+        ];
   return [
     `Generate structured right-now local scenarios with ${bounds.min} to ${bounds.max} ordered blocks (pick the count that honestly fits walking, hours, and ${availableMinutes} minutes).`,
     "Never force extra stops to hit a fixed count; one excellent stop is acceptable when it best matches the window.",
@@ -106,6 +127,10 @@ export const buildLocalScenarioPrompt = (
     `Vibe: ${vibe}`,
     `Available minutes: ${availableMinutes}`,
     `Weather: ${weather.condition}, ${weather.precipitationChance}% precipitation, certainty ${weather.certainty}`,
+    openDataPlanningContext
+      ? `Open-data planning context: mobility=${openDataPlanningContext.mobility.mode}; open-now suggested=${openDataPlanningContext.openNowHints.suggestedCategories.join(", ") || "none"}; restricted=${openDataPlanningContext.openNowHints.restrictedCategories.join(", ") || "none"}; budget=${openDataPlanningContext.budget}.`
+      : "",
+    ...socialLines,
     `Memory guidance: ${planningContext?.promptGuidance.join(" | ") ?? "Prefer novelty by ranking, not hard filtering."}`,
     foodCultureAppendix?.trim() ? `FOOD & DRINK CONTEXT (curated + strategy — keep tips short and route-relevant):\n${foodCultureAppendix.trim()}` : "",
     storyTravelAppendix?.trim() ? storyTravelAppendix.trim() : "",

@@ -7,6 +7,7 @@ import FormatListBulletedOutlinedIcon from "@mui/icons-material/FormatListBullet
 import LuggageOutlinedIcon from "@mui/icons-material/LuggageOutlined";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import MenuRoundedIcon from "@mui/icons-material/MenuRounded";
+import PeopleRoundedIcon from "@mui/icons-material/PeopleRounded";
 import PublicRoundedIcon from "@mui/icons-material/PublicRounded";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import StarBorderRoundedIcon from "@mui/icons-material/StarBorderRounded";
@@ -19,6 +20,7 @@ import { BrandLogo } from "../../shared/ui/BrandLogo";
 import { useAuthStore } from "../store/useAuthStore";
 import { useUiStore } from "../store/useUiStore";
 import { BucketListQuickAddDialog } from "../../features/bucket-list/components/BucketListQuickAddDialog";
+import { AchievementUnlockToastSurface } from "../../features/achievements/components/AchievementUnlockToastSurface";
 import { useBucketListQuickAddStore } from "../../features/bucket-list/bucketListQuickAddStore";
 import { setAnalyticsLocationConsentProvider } from "../../features/observability/appLogger";
 import { usePrivacySettingsStore } from "../store/usePrivacySettingsStore";
@@ -40,6 +42,7 @@ const navItems = [
   { to: "/travel-map", labelKey: "nav.travelMap", icon: <PublicRoundedIcon /> },
   { to: "/saved", labelKey: "nav.saved", icon: <StarBorderRoundedIcon /> },
   { to: "/bucket-list", labelKey: "nav.bucketList", icon: <FormatListBulletedOutlinedIcon /> },
+  { to: "/friends", labelKey: "nav.friends", icon: <PeopleRoundedIcon /> },
   { to: "/achievements", labelKey: "nav.achievements", icon: <EmojiEventsOutlinedIcon /> },
   { to: "/analytics", labelKey: "nav.analytics", icon: <BarChartOutlinedIcon /> },
   { to: "/settings", labelKey: "nav.settings", icon: <SettingsOutlinedIcon /> },
@@ -237,25 +240,34 @@ export const AppShell = (): JSX.Element => {
         <Box component="main" sx={{ px: { xs: 2, md: 4 }, py: { xs: 3, md: 4 }, maxWidth: 1440, mx: "auto" }}>
           <Outlet />
         </Box>
-        {toasts.map((toast, index) => (
-          <Snackbar
-            key={toast.id}
-            open
-            autoHideDuration={toast.tone === "error" ? 5200 : 3400}
-            onClose={() => dismissToast(toast.id)}
-            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-            sx={{ bottom: `${24 + index * 72}px !important` }}
-          >
-            <Alert
+        {toasts.map((toast, index) => {
+          const stackTall = toasts.some((t) => t.achievement);
+          const stackGap = stackTall ? 132 : 72;
+          const autoHideDuration = toast.achievement ? 8600 : toast.tone === "error" ? 5200 : 3400;
+          return (
+            <Snackbar
+              key={toast.id}
+              open
+              autoHideDuration={autoHideDuration}
               onClose={() => dismissToast(toast.id)}
-              severity={toast.tone}
-              variant="filled"
-              sx={{ width: "100%", minWidth: 280 }}
+              anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+              sx={{ bottom: `${24 + index * stackGap}px !important` }}
             >
-              {toast.message}
-            </Alert>
-          </Snackbar>
-        ))}
+              {toast.achievement ? (
+                <AchievementUnlockToastSurface achievement={toast.achievement} onClose={() => dismissToast(toast.id)} />
+              ) : (
+                <Alert
+                  onClose={() => dismissToast(toast.id)}
+                  severity={toast.tone}
+                  variant="filled"
+                  sx={{ width: "100%", minWidth: 280 }}
+                >
+                  {toast.message}
+                </Alert>
+              )}
+            </Snackbar>
+          );
+        })}
         <BucketListQuickAddDialog />
         {user ? (
           <Tooltip title={t("bucketList.quickFab")}>

@@ -75,7 +75,7 @@ export const SuggestedTripsSection = ({ userId }: { userId: string | undefined }
       <Grid container spacing={2}>
         {ready.trips.map((trip: SuggestedTrip) => (
           <Grid item xs={12} sm={6} md={4} key={trip.id}>
-            <SuggestedTripCard trip={trip} />
+            <SuggestedTripCard trip={trip} onRegenerateDates={() => void load()} />
           </Grid>
         ))}
       </Grid>

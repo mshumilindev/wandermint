@@ -2,10 +2,28 @@ import { create } from "zustand";
 
 export type UiToastTone = "success" | "error" | "info" | "warning";
 
+export type UiAchievementToast =
+  | {
+      kind: "single";
+      title: string;
+      description?: string;
+      category: "travel" | "exploration" | "consistency" | "challenge" | "social";
+      iconKey?: string;
+      tripLabel?: string;
+    }
+  | {
+      kind: "batch";
+      count: number;
+      tripLabel?: string;
+      previewTitles?: readonly string[];
+    };
+
 export interface UiToast {
   id: string;
   message: string;
   tone: UiToastTone;
+  /** Rich achievement unlock surface in {@link AppShell}; plain `message` stays for logs / a11y fallback. */
+  achievement?: UiAchievementToast;
 }
 
 interface UiState {

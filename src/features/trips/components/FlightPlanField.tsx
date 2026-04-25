@@ -1,333 +1,273 @@
 import FlightTakeoffIcon from "@mui/icons-material/FlightTakeoff";
 import {
-  Autocomplete,
+  Alert,
   Box,
   Button,
+  Chip,
   CircularProgress,
   Divider,
+  Stack,
   TextField,
   Typography,
 } from "@mui/material";
 import dayjs from "dayjs";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { searchAirports } from "../../../services/flights/airportCatalog";
-import type { Airport } from "../../../services/flights/flightTypes";
-import { buildManualFlightSegment, resolveFlightByNumber } from "../../../services/flights/flightLookupService";
 import type { TripDraft } from "../../../services/planning/tripGenerationService";
+import {
+  buildManualFlightSegment,
+  detectLayovers,
+  extractFlightNumbers,
+  lookupItineraryByFlightNumbers,
+} from "../../../services/flights/flightLookupService";
+import { searchAirports } from "../../../services/flights/airportCatalog";
+import type { Airport, FlightLookupResult, FlightSegment, LayoverAnalysis, LayoverFeasibility } from "../../../services/flights/flightTypes";
+import { WizardSectionHeader } from "../../../shared/ui/wizard/WizardSectionHeader";
 
 type FlightPlanFieldProps = {
   draft: TripDraft;
   patchDraft: (patch: Partial<TripDraft>) => void;
 };
 
+const formatTime = (value: string | undefined): string => {
+  if (!value) {
+    return "n/a";
+  }
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.format("MMM D, HH:mm") : value;
+};
+
+const formatSegmentLine = (segment: FlightSegment): string =>
+  `${segment.flightNumber} · ${segment.departureAirport.code} -> ${segment.arrivalAirport.code}`;
+
 const toIsoFromLocal = (local: string): string => {
   const d = dayjs(local);
   return d.isValid() ? d.toISOString() : local;
 };
 
+const badgeLabel: Record<LayoverFeasibility, string> = {
+  unknown: "Needs more flight details",
+  airport_only: "Airport only",
+  short_airport_walk: "Stay inside airport",
+  near_airport: "Near airport only",
+  city_walk_possible: "Short city walk possible",
+  city_visit_recommended: "City visit recommended",
+  airport_transfer_connection: "Airport transfer risk",
+};
+
 export const FlightPlanField = ({ draft, patchDraft }: FlightPlanFieldProps): JSX.Element => {
   const { t } = useTranslation();
-  const [inFlightNo, setInFlightNo] = useState(draft.flightInfo.flightNumber ?? "");
-  const [inFlightDate, setInFlightDate] = useState(draft.dateRange.start ?? "");
-  const [inLookupLoading, setInLookupLoading] = useState(false);
-  const [manualDep, setManualDep] = useState<Airport | null>(null);
-  const [manualArr, setManualArr] = useState<Airport | null>(null);
+  const [lookupInput, setLookupInput] = useState(draft.flightLookupInput ?? draft.flightInfo.flightNumber ?? "");
+  const [lookupDate, setLookupDate] = useState(draft.dateRange.start ?? "");
+  const [lookupState, setLookupState] = useState<"idle" | "loading" | "found" | "partial" | "not_found" | "provider_unavailable" | "error">(
+    "idle",
+  );
+  const [lookupResults, setLookupResults] = useState<FlightLookupResult[]>([]);
+  const [manualFlightNo, setManualFlightNo] = useState("");
+  const [manualDepCode, setManualDepCode] = useState("");
+  const [manualArrCode, setManualArrCode] = useState("");
   const [manualDepTime, setManualDepTime] = useState("");
   const [manualArrTime, setManualArrTime] = useState("");
 
-  const [outFlightNo, setOutFlightNo] = useState("");
-  const [outFlightDate, setOutFlightDate] = useState(draft.dateRange.end ?? "");
-  const [outLookupLoading, setOutLookupLoading] = useState(false);
-  const [outManualDep, setOutManualDep] = useState<Airport | null>(null);
-  const [outManualArr, setOutManualArr] = useState<Airport | null>(null);
-  const [outManualDepTime, setOutManualDepTime] = useState("");
-  const [outManualArrTime, setOutManualArrTime] = useState("");
+  const currentSegments = draft.layoverContext?.segments ?? [];
+  const currentLayovers = draft.layoverContext?.layovers ?? [];
+  const currentWarnings = draft.layoverContext?.warnings ?? [];
+  const parsedNumbers = useMemo(() => extractFlightNumbers(lookupInput), [lookupInput]);
 
-  const inboundSummary = useMemo(() => {
-    const f = draft.inboundFlight;
-    if (!f) {
-      return "";
-    }
-    return `${f.flightNumber} ${f.departureAirport.iataCode}→${f.arrivalAirport.iataCode}`;
-  }, [draft.inboundFlight]);
-
-  const outboundSummary = useMemo(() => {
-    const f = draft.outboundFlight;
-    if (!f) {
-      return "";
-    }
-    return `${f.flightNumber} ${f.departureAirport.iataCode}→${f.arrivalAirport.iataCode}`;
-  }, [draft.outboundFlight]);
-
-  const applyInbound = (segment: ReturnType<typeof buildManualFlightSegment>): void => {
+  const applySegments = (segments: FlightSegment[], status: FlightLookupResult["status"], warnings: string[], source: "flight_lookup" | "manual" | "mixed"): void => {
+    const layovers = detectLayovers(segments);
     patchDraft({
-      inboundFlight: segment,
+      flightLookupInput: lookupInput,
+      inboundFlight: segments[0],
+      outboundFlight: segments.length > 1 ? segments[segments.length - 1] : undefined,
+      layoverContext: {
+        source,
+        flightLookupStatus: status,
+        segments,
+        hasLayovers: layovers.length > 0,
+        layovers,
+        warnings,
+        originalFlightNumbers: parsedNumbers,
+      },
       flightInfo: {
         ...draft.flightInfo,
-        flightNumber: segment.flightNumber,
-        arrivalTime: segment.arrivalTime,
+        flightNumber: parsedNumbers.join(", "),
+        arrivalTime: segments[0]?.scheduledArrivalTime ?? segments[0]?.arrivalTime,
+        departureTime: segments.at(-1)?.scheduledDepartureTime ?? segments.at(-1)?.departureTime,
       },
     });
-    setInFlightNo(segment.flightNumber);
   };
 
-  const clearInbound = (): void => {
-    patchDraft({
-      inboundFlight: undefined,
-      flightInfo: {
-        ...draft.flightInfo,
-        flightNumber: "",
-        arrivalTime: undefined,
-      },
+  const runLookup = async (): Promise<void> => {
+    if (!lookupInput.trim()) {
+      return;
+    }
+    setLookupState("loading");
+    try {
+      const result = await lookupItineraryByFlightNumbers({
+        input: lookupInput,
+        date: lookupDate || draft.dateRange.start,
+      });
+      setLookupResults(result.results);
+      const aggregateStatus: FlightLookupResult["status"] = result.results.some((r) => r.status === "found")
+        ? result.results.every((r) => r.status === "found")
+          ? "found"
+          : "partial"
+        : result.results[0]?.status ?? "not_found";
+      if (aggregateStatus === "not_found" || aggregateStatus === "provider_unavailable") {
+        setLookupState(aggregateStatus);
+      } else {
+        setLookupState(aggregateStatus === "found" ? "found" : "partial");
+      }
+      if (result.segments.length > 0) {
+        applySegments(result.segments, aggregateStatus, result.warnings, "flight_lookup");
+      }
+    } catch {
+      setLookupState("error");
+    }
+  };
+
+  const addManualSegment = (): void => {
+    const dep = searchAirports(manualDepCode, 1)[0];
+    const arr = searchAirports(manualArrCode, 1)[0];
+    if (!dep || !arr || !manualFlightNo.trim() || !manualDepTime || !manualArrTime) {
+      return;
+    }
+    const manual = buildManualFlightSegment({
+      flightNumber: manualFlightNo,
+      departureAirport: dep as Airport,
+      arrivalAirport: arr as Airport,
+      departureTime: toIsoFromLocal(manualDepTime),
+      arrivalTime: toIsoFromLocal(manualArrTime),
     });
-    setManualDep(null);
-    setManualArr(null);
+    const merged = [...currentSegments, manual];
+    applySegments(merged, draft.layoverContext?.flightLookupStatus ?? "partial", [...currentWarnings, "Includes manual flight segment input."], draft.layoverContext ? "mixed" : "manual");
+    setManualFlightNo("");
+    setManualDepCode("");
+    setManualArrCode("");
     setManualDepTime("");
     setManualArrTime("");
   };
 
-  const applyOutbound = (segment: ReturnType<typeof buildManualFlightSegment>): void => {
-    patchDraft({
-      outboundFlight: segment,
-      flightInfo: {
-        ...draft.flightInfo,
-        departureTime: segment.departureTime,
-      },
-    });
-    setOutFlightNo(segment.flightNumber);
-  };
-
-  const clearOutbound = (): void => {
-    patchDraft({
-      outboundFlight: undefined,
-      flightInfo: {
-        ...draft.flightInfo,
-        departureTime: undefined,
-      },
-    });
-    setOutManualDep(null);
-    setOutManualArr(null);
-    setOutManualDepTime("");
-    setOutManualArrTime("");
-  };
-
-  const lookupInbound = async (): Promise<void> => {
-    setInLookupLoading(true);
-    try {
-      const seg = await resolveFlightByNumber({
-        flightNumber: inFlightNo,
-        flightDate: inFlightDate || draft.dateRange.start,
-      });
-      if (seg) {
-        applyInbound(seg);
-      }
-    } finally {
-      setInLookupLoading(false);
-    }
-  };
-
-  const saveManualInbound = (): void => {
-    if (!manualDep || !manualArr || !manualDepTime || !manualArrTime || !inFlightNo.trim()) {
-      return;
-    }
-    const segment = buildManualFlightSegment({
-      flightNumber: inFlightNo.trim(),
-      departureAirport: manualDep,
-      arrivalAirport: manualArr,
-      departureTime: toIsoFromLocal(manualDepTime),
-      arrivalTime: toIsoFromLocal(manualArrTime),
-    });
-    applyInbound(segment);
-  };
-
-  const lookupOutbound = async (): Promise<void> => {
-    setOutLookupLoading(true);
-    try {
-      const seg = await resolveFlightByNumber({
-        flightNumber: outFlightNo,
-        flightDate: outFlightDate || draft.dateRange.end,
-      });
-      if (seg) {
-        applyOutbound(seg);
-      }
-    } finally {
-      setOutLookupLoading(false);
-    }
-  };
-
-  const saveManualOutbound = (): void => {
-    if (!outManualDep || !outManualArr || !outManualDepTime || !outManualArrTime || !outFlightNo.trim()) {
-      return;
-    }
-    const segment = buildManualFlightSegment({
-      flightNumber: outFlightNo.trim(),
-      departureAirport: outManualDep,
-      arrivalAirport: outManualArr,
-      departureTime: toIsoFromLocal(outManualDepTime),
-      arrivalTime: toIsoFromLocal(outManualArrTime),
-    });
-    applyOutbound(segment);
-  };
+  const showManualFallback =
+    lookupState === "partial" || lookupState === "provider_unavailable" || lookupState === "not_found" || lookupState === "error";
 
   return (
-    <Box sx={{ display: "grid", gap: 2 }}>
-      <Typography variant="subtitle2" color="text.secondary" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        <FlightTakeoffIcon fontSize="small" />
-        {t("wizard.flightPlan.title")}
-      </Typography>
-      <Typography variant="caption" color="text.disabled">
+    <Box sx={{ display: "grid", gap: 1.5 }}>
+      <WizardSectionHeader
+        index={2}
+        title={t("wizard.flightPlan.title")}
+        subtitle="Add one or more flight numbers to detect layovers and airport timing."
+      />
+      <Typography variant="caption" color="text.secondary" sx={{ display: "flex", alignItems: "center", gap: 0.8 }}>
+        <FlightTakeoffIcon fontSize="inherit" />
         {t("wizard.flightPlan.subtitle")}
       </Typography>
-
-      <Box sx={{ display: "grid", gap: 1.5 }}>
-        <Typography variant="body2" sx={{ fontWeight: 700 }}>
-          {t("wizard.flightPlan.inbound")}
-        </Typography>
-        {inboundSummary ? (
-          <Typography variant="body2" color="primary.light">
-            {inboundSummary}
-          </Typography>
-        ) : null}
-        <TextField
-          label={t("wizard.flightPlan.flightNumber")}
-          value={inFlightNo}
-          onChange={(e) => setInFlightNo(e.target.value.toUpperCase())}
-          placeholder="BA123"
-        />
-        <TextField
-          label={t("wizard.flightPlan.flightDate")}
-          type="date"
-          InputLabelProps={{ shrink: true }}
-          value={inFlightDate}
-          onChange={(e) => setInFlightDate(e.target.value)}
-        />
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-          <Button variant="outlined" size="small" disabled={inLookupLoading || inFlightNo.trim().length < 3} onClick={() => void lookupInbound()}>
-            {inLookupLoading ? <CircularProgress size={18} /> : t("wizard.flightPlan.lookup")}
-          </Button>
-          {draft.inboundFlight ? (
-            <Button size="small" color="inherit" onClick={clearInbound}>
-              {t("wizard.flightPlan.clear")}
-            </Button>
-          ) : null}
-        </Box>
-        <Divider sx={{ borderColor: "rgba(255,255,255,0.08)" }} />
-        <Typography variant="caption" color="text.secondary">
-          {t("wizard.flightPlan.manualInbound")}
-        </Typography>
-        <Autocomplete
-          options={searchAirports("")}
-          getOptionLabel={(o) => `${o.iataCode} — ${o.name}`}
-          value={manualDep}
-          onChange={(_e, v) => setManualDep(v)}
-          renderInput={(params) => <TextField {...params} label={t("wizard.flightPlan.depAirport")} />}
-          filterOptions={(_opts, state) => searchAirports(state.inputValue, 24)}
-        />
-        <Autocomplete
-          options={searchAirports("")}
-          getOptionLabel={(o) => `${o.iataCode} — ${o.name}`}
-          value={manualArr}
-          onChange={(_e, v) => setManualArr(v)}
-          renderInput={(params) => <TextField {...params} label={t("wizard.flightPlan.arrAirport")} />}
-          filterOptions={(_opts, state) => searchAirports(state.inputValue, 24)}
-        />
-        <TextField
-          label={t("wizard.flightPlan.depTimeLocal")}
-          type="datetime-local"
-          InputLabelProps={{ shrink: true }}
-          value={manualDepTime}
-          onChange={(e) => setManualDepTime(e.target.value)}
-        />
-        <TextField
-          label={t("wizard.flightPlan.arrTimeLocal")}
-          type="datetime-local"
-          InputLabelProps={{ shrink: true }}
-          value={manualArrTime}
-          onChange={(e) => setManualArrTime(e.target.value)}
-        />
-        <Button
-          variant="contained"
-          size="small"
-          sx={{ alignSelf: "flex-start" }}
-          onClick={saveManualInbound}
-          disabled={!manualDep || !manualArr || !inFlightNo.trim() || !manualDepTime || !manualArrTime}
-        >
-          {t("wizard.flightPlan.saveManual")}
+      <TextField
+        label="Flight number"
+        placeholder="e.g. LO281 or BA847, BA177"
+        value={lookupInput}
+        onChange={(event) => setLookupInput(event.target.value.toUpperCase())}
+        helperText="Add one or more flight numbers to detect layovers and airport timing."
+      />
+      <TextField
+        label={t("wizard.flightPlan.flightDate")}
+        type="date"
+        InputLabelProps={{ shrink: true }}
+        value={lookupDate}
+        onChange={(event) => setLookupDate(event.target.value)}
+      />
+      <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
+        <Button variant="outlined" disabled={lookupState === "loading" || parsedNumbers.length === 0} onClick={() => void runLookup()}>
+          {lookupState === "loading" ? <CircularProgress size={18} /> : t("wizard.flightPlan.lookup")}
         </Button>
+        <Chip size="small" label={`Parsed: ${parsedNumbers.join(", ") || "none"}`} />
       </Box>
 
-      <Box sx={{ display: "grid", gap: 1.5 }}>
-        <Typography variant="body2" sx={{ fontWeight: 700 }}>
-          {t("wizard.flightPlan.outbound")}
-        </Typography>
-        {outboundSummary ? (
-          <Typography variant="body2" color="primary.light">
-            {outboundSummary}
-          </Typography>
-        ) : null}
-        <TextField label={t("wizard.flightPlan.flightNumber")} value={outFlightNo} onChange={(e) => setOutFlightNo(e.target.value.toUpperCase())} />
-        <TextField
-          label={t("wizard.flightPlan.flightDate")}
-          type="date"
-          InputLabelProps={{ shrink: true }}
-          value={outFlightDate}
-          onChange={(e) => setOutFlightDate(e.target.value)}
-        />
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-          <Button variant="outlined" size="small" disabled={outLookupLoading || outFlightNo.trim().length < 3} onClick={() => void lookupOutbound()}>
-            {outLookupLoading ? <CircularProgress size={18} /> : t("wizard.flightPlan.lookup")}
+      {lookupState === "provider_unavailable" ? (
+        <Alert severity="info">Flight lookup is unavailable right now. You can still add flight segments manually.</Alert>
+      ) : null}
+      {lookupState === "not_found" ? <Alert severity="warning">No route found for these flight numbers/date.</Alert> : null}
+      {lookupState === "error" ? <Alert severity="error">Flight lookup failed. You can continue with manual segment fallback.</Alert> : null}
+
+      {currentSegments.length > 0 ? (
+        <Stack spacing={1}>
+          {currentSegments.map((segment) => (
+            <Box key={segment.id} sx={{ p: 1.25, borderRadius: 2, border: "1px solid rgba(183,237,226,0.18)", display: "grid", gap: 0.5 }}>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                {formatSegmentLine(segment)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {segment.departureAirport.name ?? segment.departureAirport.code} ({segment.departureAirport.code}) {"->"}{" "}
+                {segment.arrivalAirport.name ?? segment.arrivalAirport.code} ({segment.arrivalAirport.code})
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {formatTime(segment.scheduledDepartureTime ?? segment.departureTime)} - {formatTime(segment.scheduledArrivalTime ?? segment.arrivalTime)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Source: {segment.sourceProvider} · Confidence: {segment.dataConfidence} · Status: {segment.status ?? "unknown"}
+              </Typography>
+            </Box>
+          ))}
+        </Stack>
+      ) : null}
+
+      {currentLayovers.length > 0 ? <LayoverIntelligenceWidget layovers={currentLayovers} /> : null}
+      {currentWarnings.length > 0 ? (
+        <Alert severity="info">
+          {currentWarnings.slice(0, 2).join(" ")}
+        </Alert>
+      ) : null}
+
+      {showManualFallback ? (
+        <>
+          <Divider sx={{ borderColor: "rgba(255,255,255,0.08)" }} />
+          <Typography variant="subtitle2">Manual segment fallback</Typography>
+          <TextField label={t("wizard.flightPlan.flightNumber")} value={manualFlightNo} onChange={(event) => setManualFlightNo(event.target.value.toUpperCase())} />
+          <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 1 }}>
+            <TextField label="Departure airport code" placeholder="WAW" value={manualDepCode} onChange={(event) => setManualDepCode(event.target.value.toUpperCase())} />
+            <TextField label="Arrival airport code" placeholder="LHR" value={manualArrCode} onChange={(event) => setManualArrCode(event.target.value.toUpperCase())} />
+          </Box>
+          <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 1 }}>
+            <TextField label={t("wizard.flightPlan.depTimeLocal")} type="datetime-local" InputLabelProps={{ shrink: true }} value={manualDepTime} onChange={(event) => setManualDepTime(event.target.value)} />
+            <TextField label={t("wizard.flightPlan.arrTimeLocal")} type="datetime-local" InputLabelProps={{ shrink: true }} value={manualArrTime} onChange={(event) => setManualArrTime(event.target.value)} />
+          </Box>
+          <Button
+            variant="contained"
+            sx={{ width: "fit-content" }}
+            onClick={addManualSegment}
+            disabled={!manualFlightNo.trim() || !manualDepCode.trim() || !manualArrCode.trim() || !manualDepTime || !manualArrTime}
+          >
+            {t("wizard.flightPlan.saveManual")}
           </Button>
-          {draft.outboundFlight ? (
-            <Button size="small" color="inherit" onClick={clearOutbound}>
-              {t("wizard.flightPlan.clear")}
-            </Button>
-          ) : null}
-        </Box>
-        <Divider sx={{ borderColor: "rgba(255,255,255,0.08)" }} />
-        <Typography variant="caption" color="text.secondary">
-          {t("wizard.flightPlan.manualOutbound")}
-        </Typography>
-        <Autocomplete
-          options={searchAirports("")}
-          getOptionLabel={(o) => `${o.iataCode} — ${o.name}`}
-          value={outManualDep}
-          onChange={(_e, v) => setOutManualDep(v)}
-          renderInput={(params) => <TextField {...params} label={t("wizard.flightPlan.depAirport")} />}
-          filterOptions={(_opts, state) => searchAirports(state.inputValue, 24)}
-        />
-        <Autocomplete
-          options={searchAirports("")}
-          getOptionLabel={(o) => `${o.iataCode} — ${o.name}`}
-          value={outManualArr}
-          onChange={(_e, v) => setOutManualArr(v)}
-          renderInput={(params) => <TextField {...params} label={t("wizard.flightPlan.arrAirport")} />}
-          filterOptions={(_opts, state) => searchAirports(state.inputValue, 24)}
-        />
-        <TextField
-          label={t("wizard.flightPlan.depTimeLocal")}
-          type="datetime-local"
-          InputLabelProps={{ shrink: true }}
-          value={outManualDepTime}
-          onChange={(e) => setOutManualDepTime(e.target.value)}
-        />
-        <TextField
-          label={t("wizard.flightPlan.arrTimeLocal")}
-          type="datetime-local"
-          InputLabelProps={{ shrink: true }}
-          value={outManualArrTime}
-          onChange={(e) => setOutManualArrTime(e.target.value)}
-        />
-        <Button
-          variant="contained"
-          size="small"
-          sx={{ alignSelf: "flex-start" }}
-          onClick={saveManualOutbound}
-          disabled={!outManualDep || !outManualArr || !outFlightNo.trim() || !outManualDepTime || !outManualArrTime}
-        >
-          {t("wizard.flightPlan.saveManual")}
-        </Button>
-      </Box>
+        </>
+      ) : null}
     </Box>
   );
 };
+
+const LayoverIntelligenceWidget = ({ layovers }: { layovers: LayoverAnalysis[] }): JSX.Element => (
+  <Box sx={{ display: "grid", gap: 1 }}>
+    <Typography variant="subtitle2">Layover Intelligence</Typography>
+    {layovers.map((layover) => (
+      <Box key={layover.id} sx={{ p: 1.25, borderRadius: 2, border: "1px solid rgba(183,237,226,0.18)", display: "grid", gap: 0.6 }}>
+        <Typography variant="body2" sx={{ fontWeight: 700 }}>
+          {layover.previousFlight.flightNumber} {"->"} {layover.airport.code} {"->"} {layover.nextFlight.flightNumber}
+        </Typography>
+        <Box sx={{ display: "flex", gap: 0.8, flexWrap: "wrap" }}>
+          <Chip size="small" color="primary" label={badgeLabel[layover.feasibility]} />
+          <Chip size="small" label={`Layover: ${layover.durationMinutes ?? "n/a"} min`} />
+          <Chip size="small" label={`Usable: ${layover.usableFreeTimeMinutes ?? "n/a"} min`} />
+        </Box>
+        <Typography variant="caption" color="text.secondary">
+          {layover.recommendationTitle}: {layover.recommendationDescription}
+        </Typography>
+        {layover.suggestedMiniPlan ? (
+          <Typography variant="caption" color="text.secondary">
+            Mini-plan: {layover.suggestedMiniPlan.title} ({layover.suggestedMiniPlan.durationMinutes} min)
+          </Typography>
+        ) : null}
+      </Box>
+    ))}
+  </Box>
+);

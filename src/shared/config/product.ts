@@ -13,6 +13,7 @@ export const brandAssets = {
 
 export const firestoreCollections = {
   users: "users",
+  friends: "friends",
   trips: "trips",
   tripDays: "tripDays",
   tripWarnings: "tripWarnings",

@@ -1,3 +1,12 @@
+import type {
+  AlternativeDateWindow,
+  BudgetDisplayMode,
+  RecommendedDateWindow,
+  SuggestionHeroImage,
+  SuggestionSignalDetail,
+  TripBudgetBreakdown,
+} from "../../features/travel-pricing/types/tripBudget.types";
+
 /**
  * Homepage trip suggestion engine — kinds are assigned by deterministic scoring;
  * copy is refined locally (optional remote AI later) without inventing destinations.
@@ -27,11 +36,20 @@ export type SuggestedTrip = {
   title: string;
   destination: SuggestedTripDestination;
   durationDays: number;
+  /** Legacy aggregate; when `budgetBreakdown` is set, totals are derived from that breakdown only. */
   estimatedBudget: SuggestedTripBudgetEstimate;
   reasoning: string;
   confidence: number;
   sourceSignals: string[];
   type: HomeTripSuggestionKind;
+  /** Populated after travel-pricing enrichment (source-backed or partial). */
+  budgetBreakdown?: TripBudgetBreakdown;
+  budgetDisplayMode?: BudgetDisplayMode;
+  recommendedDateWindow?: RecommendedDateWindow;
+  alternativeDateWindows?: AlternativeDateWindow[];
+  heroImage?: SuggestionHeroImage;
+  signalsDetailed?: SuggestionSignalDetail[];
+  priceDataFetchedAt?: string;
 };
 
 /** Internal candidate before AI refinement — same destination/budget/duration constraints. */

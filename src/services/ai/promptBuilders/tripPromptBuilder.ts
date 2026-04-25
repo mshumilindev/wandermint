@@ -22,6 +22,7 @@ import { formatFoodCultureLayersForTripPrompt } from "../../foodCulture/foodCult
 import { formatStoryTravelPromptAppendix, refineStoryTravelExperiences } from "../../storyTravel/storyTravelAiLayer";
 import { mergeStoryTravelPreferences } from "../../storyTravel/storyTravelDefaults";
 import { storySuggestionsForTripDraft } from "../../storyTravel/storyTravelSuggestionService";
+import type { PlanningContextWidgetModel } from "../../../features/planning-context/planningContext.types";
 
 const summarizeDiscovery = (discovery: DestinationDiscovery): string => {
   const summarizeItems = (label: string, items: DestinationDiscovery[keyof Pick<DestinationDiscovery, "attractions" | "museums" | "localFood" | "traditionalDrinks" | "nearbyPlaces" | "dayTrips" | "mustSee">]): string =>
@@ -41,6 +42,7 @@ const summarizeDiscovery = (discovery: DestinationDiscovery): string => {
 export type TripGenerationPromptExtras = {
   tripOptionPlan: TripOptionCountPlan;
   accommodationSummary?: string;
+  planningContextOpenData?: PlanningContextWidgetModel;
 };
 
 export const buildTripGenerationPrompt = (
@@ -85,6 +87,7 @@ export const buildTripGenerationPrompt = (
     .join(" | ");
 
   const plan = extras.tripOptionPlan;
+  const openData = extras.planningContextOpenData;
   const acc = extras.accommodationSummary?.trim();
   const flightClause = buildFlightPlanningClause(draft);
   const transportClause = buildTransportNodePlanningClause(draft).trim();
@@ -93,6 +96,31 @@ export const buildTripGenerationPrompt = (
       ? "When structured intercity transport hubs are listed, honor their exact pins for same-day routing and segment hand-offs — do not substitute different hub names or merge distant terminals without travel time."
       : "";
   const avoidClause = buildTripGenerationAvoidClause(draft.userPreferences?.preferenceProfile).trim();
+  const layoverContext = draft.layoverContext;
+  const layoverRuleBlock = layoverContext
+    ? [
+        `Layover context source=${layoverContext.source}; lookupStatus=${layoverContext.flightLookupStatus}; hasLayovers=${layoverContext.hasLayovers}; originalFlightNumbers=${layoverContext.originalFlightNumbers?.join(", ") || "none"}.`,
+        layoverContext.segments.length > 0
+          ? `Normalized flight segments: ${layoverContext.segments
+              .map(
+                (segment) =>
+                  `${segment.flightNumber} ${segment.departureAirport.code}->${segment.arrivalAirport.code} dep ${segment.scheduledDepartureTime ?? "unknown"} arr ${segment.scheduledArrivalTime ?? "unknown"} status ${segment.status ?? "unknown"} confidence ${segment.dataConfidence} source ${segment.sourceProvider}`,
+              )
+              .join(" | ")}`
+          : "",
+        layoverContext.layovers.length > 0
+          ? `Layovers: ${layoverContext.layovers
+              .map(
+                (layover) =>
+                  `${layover.airport.code}: duration ${layover.durationMinutes ?? "unknown"}m, usable ${layover.usableFreeTimeMinutes ?? "unknown"}m, feasibility ${layover.feasibility}, buffers exit ${layover.estimatedAirportExitMinutes}m + return ${layover.estimatedReturnBufferMinutes}m + city transfer ${layover.estimatedCityTransferMinutes ?? 0}m, recommendation ${layover.recommendationTitle}`,
+              )
+              .join(" | ")}`
+          : "",
+        layoverContext.warnings.length > 0 ? `Layover warnings: ${layoverContext.warnings.join(" | ")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : "";
   const foodPlanner = mergeFoodDrinkPlannerSettings(draft.preferences.foodDrinkPlanner);
   const foodCultureLayers = draft.tripSegments
     .filter((s) => s.city.trim() && s.country.trim())
@@ -138,6 +166,9 @@ export const buildTripGenerationPrompt = (
     `Generate between ${plan.min} and ${plan.max} structured future trip options; target ${plan.target} meaningfully different plans (${plan.reason}).`,
     "If fewer genuinely distinct variants are possible without inventing fake logistics, return fewer options rather than padding — at least one complete option is required.",
     "AI may interpret tradeoffs, but factual claims must come from provider snapshots supplied by the application.",
+    "FLIGHT + LAYOVER RULES: use flight lookup/manual segment data when present; never invent route/times/status; never claim live status unless explicitly present in provided data.",
+    "Never suggest leaving airport for airport_only or short_airport_walk feasibility. Keep buffers conservative (security, immigration, baggage, terminal transfer, return buffer).",
+    "If uncertain about connection safety, choose safer recommendation and keep user in-airport or near-airport.",
     "Use destinationDiscovery as the grounding layer for attractions, museums, local food, traditional drinks, nearby places, day trips, and user must-see requests.",
     "If a user must-see item has low confidence or weak provider grounding, keep it as a preference, propose safer grounded alternatives, and avoid pretending ratings or availability.",
     "Respect locked logistics, budget, pace, avoids, and walking tolerance.",
@@ -174,6 +205,7 @@ export const buildTripGenerationPrompt = (
     `Segment transitions: ${segmentTransitionSummary || "none"}`,
     `Dates: ${draft.dateRange.start} to ${draft.dateRange.end}`,
     flightClause ? flightClause : "",
+    layoverRuleBlock ? layoverRuleBlock : "",
     draft.inboundFlight || draft.outboundFlight
       ? "Flight logistics override naive density: honor the arrival/departure buffers above and never invent alternate flights."
       : "",
@@ -194,6 +226,21 @@ export const buildTripGenerationPrompt = (
     foodCultureBlock,
     `Avoids: ${draft.preferences.avoids.join(", ")}`,
     `Weather provider context: ${weatherSummary}`,
+    openData
+      ? `Open-data multi-location context: locations=${openData.locations.length}; days=${openData.timeWindow.totalDays}; mobility=${openData.mobility.mode}; budget=${openData.budget}.`
+      : "",
+    openData
+      ? `Per-location weather snapshots: ${openData.locations
+          .map((loc) => {
+            const label = loc.location.label ?? [loc.location.city, loc.location.country].filter(Boolean).join(", ");
+            const first = loc.weather?.daily?.[0];
+            return `${label}: ${first ? `${first.condition} ${Math.round(first.max)}°/${Math.round(first.min)}°` : "partial context"}`;
+          })
+          .join(" | ")}`
+      : "",
+    openData
+      ? "When cities differ by weather, adapt each day per city (outdoor in clear cities, indoor in rainy/stormy cities)."
+      : "",
     `Destination discovery context:\n${summarizeDiscovery(discovery)}`,
     `Planning memory guidance: ${planningContext.promptGuidance.join(" | ")}`,
     travelBehaviorDirective ? `Learned behavior (compact): ${travelBehaviorDirective}` : "",

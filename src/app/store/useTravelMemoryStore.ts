@@ -1,7 +1,10 @@
 import { create } from "zustand";
 import type { TravelMemory } from "../../entities/travel-memory/model";
+import { invalidateTravelAnalyticsCache } from "../../features/analytics/analyticsRepository";
+import { refreshUserAchievements } from "../../features/achievements/achievementTriggers";
+import { syncBucketListVisitedFromTravelMemory } from "../../features/bucket-list/bucketListTravelMemorySync";
 import { travelMemoriesRepository } from "../../services/firebase/repositories/travelMemoriesRepository";
-import { getErrorMessage } from "../../shared/lib/errors";
+import { debugLogError, getErrorMessage } from "../../shared/lib/errors";
 import { cacheDurations, createIdleCacheMeta, isCacheFresh, type CacheMeta } from "../../shared/types/cache";
 
 interface TravelMemoryState {
@@ -56,6 +59,20 @@ export const useTravelMemoryStore = create<TravelMemoryState>((set, get) => ({
       memoryIds: state.memoryIds.includes(memory.id) ? state.memoryIds : [memory.id, ...state.memoryIds],
       meta: { ...state.meta, status: "success", isDirty: false, lastFetchedAt: state.meta.lastFetchedAt ?? Date.now() },
     }));
+    const uid = memory.userId.trim();
+    invalidateTravelAnalyticsCache(uid);
+    void (async () => {
+      try {
+        await syncBucketListVisitedFromTravelMemory(uid, memory);
+      } catch (error) {
+        debugLogError("bucket_list_travel_memory_sync", error);
+      }
+      try {
+        await refreshUserAchievements(uid);
+      } catch (error) {
+        debugLogError("achievements_travel_memory_refresh", error);
+      }
+    })();
   },
 
   deleteMemory: async (memoryId) => {
@@ -63,6 +80,7 @@ export const useTravelMemoryStore = create<TravelMemoryState>((set, get) => ({
       return;
     }
 
+    const prev = get().memoriesById[memoryId];
     await travelMemoriesRepository.deleteTravelMemory(memoryId);
     set((state) => {
       const nextMemories = { ...state.memoriesById };
@@ -74,5 +92,10 @@ export const useTravelMemoryStore = create<TravelMemoryState>((set, get) => ({
         meta: { ...state.meta, status: "success", isDirty: false, lastFetchedAt: state.meta.lastFetchedAt ?? Date.now() },
       };
     });
+    const uid = prev?.userId?.trim();
+    if (uid) {
+      invalidateTravelAnalyticsCache(uid);
+      void refreshUserAchievements(uid).catch((error) => debugLogError("achievements_travel_memory_delete_refresh", error));
+    }
   },
 }));

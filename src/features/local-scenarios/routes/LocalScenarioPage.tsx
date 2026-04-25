@@ -1,14 +1,17 @@
 import MyLocationOutlinedIcon from "@mui/icons-material/MyLocationOutlined";
-import { Alert, Box, Button, Grid, MenuItem, TextField } from "@mui/material";
+import { Alert, Avatar, Box, Button, Chip, Grid, MenuItem, TextField, Typography } from "@mui/material";
 import type { RightNowSpendTier } from "../../../services/ai/promptBuilders/localScenarioPromptBuilder";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "@tanstack/react-router";
 import { useAuthStore } from "../../../app/store/useAuthStore";
 import { usePrivacySettingsStore } from "../../../app/store/usePrivacySettingsStore";
 import { useLocalScenariosStore } from "../../../app/store/useLocalScenariosStore";
 import { useUserPreferencesStore } from "../../../app/store/useUserPreferencesStore";
 import { useTravelMemoryStore } from "../../../app/store/useTravelMemoryStore";
 import { usePlaceMemoryStore } from "../../../app/store/usePlaceMemoryStore";
+import { useFriendsStore } from "../../../app/store/useFriendsStore";
+import type { Friend, RightNowSocialContext, RightNowSocialMode } from "../../../entities/friend/model";
 import { ScenarioCardsGridSkeleton } from "../../../shared/ui/skeletons/ScenarioCardsGridSkeleton";
 import { SectionHeader } from "../../../shared/ui/SectionHeader";
 import { GlassPanel } from "../../../shared/ui/GlassPanel";
@@ -17,6 +20,14 @@ import { publicGeoProvider } from "../../../services/providers/publicGeoProvider
 import { createDefaultPrivacySettings } from "../../privacy/privacySettings.types";
 import { ConfirmActionDialog } from "../../../shared/ui/ConfirmActionDialog";
 import { ScenarioSummaryCard } from "../components/ScenarioSummaryCard";
+import { PlanningContextWidgets } from "../../planning-context/components/PlanningContextWidgets";
+import { resolvePlanningLocations } from "../../planning-context/resolvePlanningLocations";
+import {
+  computeGroupMidpoint,
+  createCurrentUserParticipant,
+  createParticipantFromFriend,
+  getFriendsInSameCity,
+} from "../lib/rightNowSocial";
 
 const vibeOptions = [
   { value: "coffee + gallery + walk", labelKey: "local.vibes.coffeeGallery" },
@@ -34,6 +45,22 @@ interface CurrentLocationState {
   status: "idle" | "locating" | "ready" | "error" | "consent_needed";
 }
 
+const initials = (name: string): string =>
+  name
+    .split(/\s+/)
+    .map((part) => part[0] ?? "")
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
+const parseCityCountryFromLabel = (label: string): { city?: string; country?: string } => {
+  const [cityRaw, countryRaw] = label.split(",").map((part) => part.trim());
+  return {
+    city: cityRaw || undefined,
+    country: countryRaw || undefined,
+  };
+};
+
 export const LocalScenarioPage = (): JSX.Element => {
   const { t } = useTranslation();
   const user = useAuthStore((state) => state.user);
@@ -50,6 +77,9 @@ export const LocalScenarioPage = (): JSX.Element => {
   const ensurePlaceMemories = usePlaceMemoryStore((state) => state.ensureMemories);
   const placeMemoriesById = usePlaceMemoryStore((state) => state.memoriesById);
   const placeMemoryIds = usePlaceMemoryStore((state) => state.memoryIds);
+  const friendIds = useFriendsStore((state) => state.friendIds);
+  const friendsById = useFriendsStore((state) => state.friendsById);
+  const ensureFriends = useFriendsStore((state) => state.ensureFriends);
   const scenarioIds = useLocalScenariosStore((state) => state.scenarioIds);
   const scenariosById = useLocalScenariosStore((state) => state.scenariosById);
   const meta = useLocalScenariosStore((state) => state.flowMeta);
@@ -63,6 +93,8 @@ export const LocalScenarioPage = (): JSX.Element => {
   const [availableHours, setAvailableHours] = useState(2);
   const [availableMinuteRemainder, setAvailableMinuteRemainder] = useState(30);
   const [spendTier, setSpendTier] = useState<RightNowSpendTier>("flexible");
+  const [socialMode, setSocialMode] = useState<RightNowSocialMode>("solo");
+  const [selectedFriendIds, setSelectedFriendIds] = useState<string[]>([]);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const fetchGeolocationIntoState = useCallback((): void => {
@@ -141,7 +173,8 @@ export const LocalScenarioPage = (): JSX.Element => {
     }
     void ensureTravelMemories(user.id);
     void ensurePlaceMemories(user.id);
-  }, [ensurePlaceMemories, ensureTravelMemories, user?.id]);
+    void ensureFriends(user.id);
+  }, [ensureFriends, ensurePlaceMemories, ensureTravelMemories, user?.id]);
 
   const deferredScenarioIds = useDeferredValue(scenarioIds);
   const scenarios = deferredScenarioIds.map((scenarioId) => scenariosById[scenarioId]).filter((scenario): scenario is NonNullable<typeof scenario> => Boolean(scenario));
@@ -153,15 +186,129 @@ export const LocalScenarioPage = (): JSX.Element => {
     () => placeMemoryIds.map((id) => placeMemoriesById[id]).filter((memory): memory is NonNullable<typeof memory> => Boolean(memory)),
     [placeMemoriesById, placeMemoryIds],
   );
+  const friends = useMemo(
+    () => friendIds.map((id) => friendsById[id]).filter((item): item is Friend => Boolean(item)),
+    [friendIds, friendsById],
+  );
+  const parsedLocation = useMemo(() => parseCityCountryFromLabel(currentLocation.label), [currentLocation.label]);
+  const sameCityFriends = useMemo(
+    () => (parsedLocation.city ? getFriendsInSameCity(parsedLocation.city, friends) : []),
+    [friends, parsedLocation.city],
+  );
+  const selectedFriends = useMemo(() => {
+    const selected = sameCityFriends.filter((friend) => selectedFriendIds.includes(friend.id));
+    if (socialMode === "duo") {
+      return selected.slice(0, 1);
+    }
+    return selected;
+  }, [sameCityFriends, selectedFriendIds, socialMode]);
+  const socialContext = useMemo<RightNowSocialContext | undefined>(() => {
+    if (socialMode === "solo") {
+      return {
+        mode: "solo",
+        participants: [
+          createCurrentUserParticipant({
+            userId: user?.id,
+            userName: user?.displayName,
+            city: parsedLocation.city ?? currentLocation.label,
+            country: parsedLocation.country,
+            address: currentLocation.label,
+            latitude: currentLocation.latitude,
+            longitude: currentLocation.longitude,
+          }),
+        ],
+        participantCount: 1,
+        locationStrategy: {
+          preferred: "near_me",
+          allowCitywideInterestingDetours: false,
+        },
+      };
+    }
+    const me = createCurrentUserParticipant({
+      userId: user?.id,
+      userName: user?.displayName,
+      city: parsedLocation.city ?? currentLocation.label,
+      country: parsedLocation.country,
+      address: currentLocation.label,
+      latitude: currentLocation.latitude,
+      longitude: currentLocation.longitude,
+    });
+    const friendParticipants = selectedFriends.map(createParticipantFromFriend);
+    const participants = [me, ...friendParticipants];
+    const midpoint = computeGroupMidpoint(participants);
+    return {
+      mode: socialMode,
+      participants,
+      participantCount: participants.length,
+      locationStrategy: {
+        preferred: midpoint ? "midpoint" : "citywide",
+        allowCitywideInterestingDetours: true,
+        midpoint,
+      },
+    };
+  }, [
+    socialMode,
+    user?.id,
+    user?.displayName,
+    parsedLocation.city,
+    parsedLocation.country,
+    currentLocation.label,
+    currentLocation.latitude,
+    currentLocation.longitude,
+    selectedFriends,
+  ]);
+  const groupPeopleLabel = useMemo(() => {
+    if (selectedFriends.length === 0) {
+      return t("local.social.someone");
+    }
+    const shown = selectedFriends.slice(0, 2).map((item) => item.name);
+    const hiddenCount = Math.max(0, selectedFriends.length - shown.length);
+    if (hiddenCount === 0) {
+      return shown.join(", ");
+    }
+    return `${shown.join(", ")} ${t("local.social.andOthers", { count: hiddenCount })}`;
+  }, [selectedFriends, t]);
+
+  useEffect(() => {
+    if (socialMode === "solo") {
+      if (selectedFriendIds.length > 0) {
+        setSelectedFriendIds([]);
+      }
+      return;
+    }
+    const allowedIds = new Set(sameCityFriends.map((friend) => friend.id));
+    const filtered = selectedFriendIds.filter((id) => allowedIds.has(id));
+    if (socialMode === "duo" && filtered.length > 1) {
+      setSelectedFriendIds(filtered.slice(0, 1));
+      return;
+    }
+    if (filtered.length !== selectedFriendIds.length) {
+      setSelectedFriendIds(filtered);
+    }
+  }, [sameCityFriends, selectedFriendIds, socialMode]);
+
   const availableMinutes = availableHours * 60 + availableMinuteRemainder;
+  const rightNowWidgetLocations = useMemo(
+    () =>
+      resolvePlanningLocations("right_now", {
+        locationLabel: currentLocation.label,
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+      }),
+    [currentLocation.label, currentLocation.latitude, currentLocation.longitude],
+  );
   const isGenerating = meta.status === "loading";
   const generatingScenarioSkeletonCount = Math.min(Math.max(expectedScenarioCount || 3, 1), 6);
+  const duoSelectionValid = socialMode !== "duo" || selectedFriends.length === 1;
+  const groupSelectionValid = socialMode !== "group" || selectedFriends.length > 0;
   const isRequestValid =
     currentLocation.status === "ready" &&
     currentLocation.latitude !== undefined &&
     currentLocation.longitude !== undefined &&
     vibe.trim().length > 0 &&
-    availableMinutes >= 30;
+    availableMinutes >= 30 &&
+    duoSelectionValid &&
+    groupSelectionValid;
 
   const validateRequest = (): string | null => {
     if (currentLocation.status === "idle") {
@@ -181,6 +328,12 @@ export const LocalScenarioPage = (): JSX.Element => {
     }
     if (availableMinutes < 30) {
       return t("local.errors.timeTooShort");
+    }
+    if (socialMode === "duo" && selectedFriends.length !== 1) {
+      return t("local.social.duoValidation");
+    }
+    if (socialMode === "group" && selectedFriends.length === 0) {
+      return t("local.social.groupValidation");
     }
     return null;
   };
@@ -225,6 +378,7 @@ export const LocalScenarioPage = (): JSX.Element => {
       userPreferences: preferences,
       travelMemories,
       placeMemories,
+      socialContext,
     });
   };
 
@@ -301,6 +455,99 @@ export const LocalScenarioPage = (): JSX.Element => {
           </TextField>
           <Box
             sx={{
+              display: "grid",
+              gap: 1,
+              gridColumn: { xs: "1 / -1", md: "1 / span 5" },
+              border: "1px solid rgba(183, 237, 226, 0.16)",
+              borderRadius: 2,
+              p: 1.2,
+              background: "rgba(4, 14, 20, 0.36)",
+            }}
+          >
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+              {t("local.social.title")}
+            </Typography>
+            <Box sx={{ display: "flex", gap: 0.8, flexWrap: "wrap" }}>
+              {(["solo", "duo", "group"] as const).map((mode) => (
+                <Chip
+                  key={mode}
+                  label={t(`local.social.mode.${mode}`)}
+                  clickable
+                  color={socialMode === mode ? "primary" : "default"}
+                  variant={socialMode === mode ? "filled" : "outlined"}
+                  onClick={() => setSocialMode(mode)}
+                />
+              ))}
+            </Box>
+            {socialMode !== "solo" ? (
+              <Box sx={{ display: "grid", gap: 0.7 }}>
+                {friends.length === 0 ? (
+                  <Alert
+                    severity="info"
+                    action={
+                      <Button component={Link} to="/friends" color="inherit" size="small">
+                        {t("local.social.openFriends")}
+                      </Button>
+                    }
+                  >
+                    {t("local.social.noFriends")}
+                  </Alert>
+                ) : sameCityFriends.length === 0 ? (
+                  <Alert severity="info">{t("local.social.noSameCityFriends")}</Alert>
+                ) : (
+                  <Box sx={{ display: "flex", gap: 0.8, flexWrap: "wrap" }}>
+                    {sameCityFriends.map((friend) => {
+                      const selected = selectedFriendIds.includes(friend.id);
+                      return (
+                        <Button
+                          key={friend.id}
+                          variant={selected ? "contained" : "outlined"}
+                          color={selected ? "primary" : "inherit"}
+                          onClick={() => {
+                            if (socialMode === "duo") {
+                              setSelectedFriendIds(selected ? [] : [friend.id]);
+                              return;
+                            }
+                            setSelectedFriendIds((current) =>
+                              selected ? current.filter((id) => id !== friend.id) : [...current, friend.id],
+                            );
+                          }}
+                          sx={{ textTransform: "none", gap: 0.8, pl: 0.8, pr: 1.1 }}
+                          startIcon={
+                            <Avatar src={friend.avatarUrl} alt={friend.name} sx={{ width: 22, height: 22, fontSize: 11 }}>
+                              {initials(friend.name)}
+                            </Avatar>
+                          }
+                        >
+                          {friend.name}
+                        </Button>
+                      );
+                    })}
+                  </Box>
+                )}
+              </Box>
+            ) : null}
+            <Typography variant="caption" color="text.secondary">
+              {socialMode === "solo"
+                ? t("local.social.summary.solo", { city: parsedLocation.city ?? currentLocation.label })
+                : socialMode === "duo"
+                  ? t("local.social.summary.duo", {
+                      city: parsedLocation.city ?? currentLocation.label,
+                      friendName: selectedFriends[0]?.name ?? t("local.social.someone"),
+                    })
+                  : t("local.social.summary.group", {
+                      city: parsedLocation.city ?? currentLocation.label,
+                      people: groupPeopleLabel,
+                    })}
+            </Typography>
+            {socialContext?.locationStrategy.preferred === "midpoint" ? (
+              <Typography variant="caption" color="text.secondary">
+                {t("local.social.midpointHint")}
+              </Typography>
+            ) : null}
+          </Box>
+          <Box
+            sx={{
               display: "flex",
               flexDirection: { xs: "column", sm: "row" },
               gap: 1,
@@ -318,6 +565,7 @@ export const LocalScenarioPage = (): JSX.Element => {
           </Box>
         </Box>
       </GlassPanel>
+      <PlanningContextWidgets flow="right_now" locations={rightNowWidgetLocations} />
       {validationError ? <Alert severity="warning">{validationError}</Alert> : null}
       <ConfirmActionDialog
         open={locationConsentOpen}

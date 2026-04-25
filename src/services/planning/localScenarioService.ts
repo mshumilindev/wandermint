@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 import type { ActivityAlternative, ActivityBlock, CostRange, PlaceSnapshot } from "../../entities/activity/model";
+import type { RightNowSocialContext } from "../../entities/friend/model";
 import type { PlaceExperienceMemory } from "../../entities/place-memory/model";
 import type { TravelMemory } from "../../entities/travel-memory/model";
 import type { RightNowExploreSpeed, UserPreferences } from "../../entities/user/model";
@@ -39,6 +40,8 @@ import { adjustFoodCandidateScores } from "../foodCulture/adjustFoodCandidateSco
 import { flickSyncLibraryRepository } from "../flicksync/flickSyncLibraryRepository";
 import { formatStoryTravelPromptAppendix, refineStoryTravelExperiences } from "../storyTravel/storyTravelAiLayer";
 import { flickTitleSignalsForStoryLayer, storySuggestionsForRightNow } from "../storyTravel/storyTravelSuggestionService";
+import { buildPlanningContextWidgets } from "../../features/planning-context/planningContextBuilder";
+import { resolvePlanningLocations } from "../../features/planning-context/resolvePlanningLocations";
 
 interface LocalScenarioRequest {
   userId?: string;
@@ -54,6 +57,7 @@ interface LocalScenarioRequest {
   placeMemories?: PlaceExperienceMemory[];
   /** Optional override; defaults to balanced planner + user avoids/interests. */
   foodDrinkPlanner?: FoodDrinkPlannerSettings | null;
+  socialContext?: RightNowSocialContext;
 }
 
 const resolveExploreSpeed = (prefs?: UserPreferences | null): RightNowExploreSpeed => prefs?.rightNowExploreSpeed ?? "balanced";
@@ -1005,13 +1009,19 @@ export const localScenarioService = {
         /* optional */
       }
     }
+    const partyComposition =
+      request.socialContext?.mode === "duo"
+        ? "couple"
+        : request.socialContext?.mode === "group"
+          ? "friends"
+          : "solo";
     const planningContext = buildPlanningContext({
       userPreferences: request.userPreferences,
       travelMemories: request.travelMemories,
       placeMemories: request.placeMemories,
       draft: {
         preferences: {
-          partyComposition: "solo",
+          partyComposition,
           vibe: [request.vibe],
           foodInterests: request.userPreferences?.foodInterests ?? [],
           walkingTolerance: request.userPreferences?.walkingTolerance ?? "medium",
@@ -1033,6 +1043,14 @@ export const localScenarioService = {
     const point = request.latitude !== undefined && request.longitude !== undefined
       ? { latitude: request.latitude, longitude: request.longitude, label: request.locationLabel }
       : await publicGeoProvider.geocode(request.locationLabel);
+    const openDataPlanningContext = await buildPlanningContextWidgets({
+      flow: "right_now",
+      locations: resolvePlanningLocations("right_now", {
+        locationLabel: point.label,
+        latitude: point.latitude,
+        longitude: point.longitude,
+      }),
+    }).catch(() => null);
 
     hooks?.onStep?.("checking_weather");
     const weather = await publicWeatherProvider.getCurrentWeatherAt(point).catch(() => fallbackWeather(point.label));
@@ -1190,6 +1208,8 @@ export const localScenarioService = {
       exploreSpeed,
       formatFoodCultureForRightNowPrompt(rightNowFoodLayer, planner, timeContext.hour),
       storyTravelAppendix,
+      request.socialContext,
+      openDataPlanningContext ?? undefined,
     );
     const allowFoodCrawl = detectFoodCrawlIntent(request.vibe);
 
@@ -1227,6 +1247,7 @@ export const localScenarioService = {
       hooks?.onStep?.("refining_with_ai");
       const aiResult = await openAiGatewayClient.generateLocalScenarios({
         request: { ...request, locationLabel: point.label, latitude: point.latitude, longitude: point.longitude },
+        planningContext: openDataPlanningContext ?? undefined,
         weather,
         places: groundedPlaces.slice(0, 10),
         discovery,

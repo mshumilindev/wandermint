@@ -1,3 +1,4 @@
+import { travelMemoriesRepository } from "../../services/firebase/repositories/travelMemoriesRepository";
 import { tripsRepository } from "../../services/firebase/repositories/tripsRepository";
 import { tripReviewsRepository } from "../../services/firebase/repositories/tripReviewsRepository";
 import { travelBehaviorRepository } from "../user-behavior/travelBehaviorRepository";
@@ -28,15 +29,16 @@ const loadBucketSummary = async (userId: string): Promise<BucketListAnalyticsSum
 
 const loadRawInputs = async (userId: string): Promise<TravelAnalyticsRawInput> => {
   const uid = userId.trim();
-  const [behaviorProfile, tripReviews, achievements, trips, bucketListSummary] = await Promise.all([
+  const [behaviorProfile, tripReviews, achievements, trips, bucketListSummary, travelMemories] = await Promise.all([
     travelBehaviorRepository.getProfile(uid).catch(() => null),
     tripReviewsRepository.listByUserId(uid).catch(() => []),
     achievementRepository.listByUserId(uid).catch(() => []),
     tripsRepository.getUserTrips(uid),
     loadBucketSummary(uid),
+    travelMemoriesRepository.getUserTravelMemories(uid).catch(() => []),
   ]);
-  const metrics = await loadAchievementAnalyticsMetrics(uid, trips);
-  const tripScan = await scanTripAnalyticsData(trips, tripReviews);
+  const metrics = await loadAchievementAnalyticsMetrics(uid, trips, travelMemories);
+  const tripScan = await scanTripAnalyticsData(trips, tripReviews, travelMemories);
 
   return {
     userId: uid,

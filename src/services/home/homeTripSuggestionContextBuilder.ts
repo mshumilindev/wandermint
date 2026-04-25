@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 import type { FlickSyncLibraryItem } from "../../entities/flicksync/model";
+import type { TravelMemory } from "../../entities/travel-memory/model";
 import type { Trip } from "../../entities/trip/model";
 import type { BucketListItem, BucketListPayload } from "../../features/bucket-list/bucketList.types";
 import type { PreferenceProfile, UserPreferences } from "../../entities/user/model";
@@ -14,6 +15,11 @@ import { travelTasteRepository } from "../../features/user-taste/travelTasteRepo
 import { defaultMusicPersonalizationSettings, type MusicTasteProfile } from "../../integrations/music/musicTypes";
 import { flickSyncLibraryRepository } from "../flicksync/flickSyncLibraryRepository";
 import { scoreFlickSyncLibraryInterest } from "../flicksync/flickSyncLibrarySignals";
+import {
+  isTravelMemoryEligibleForAggregates,
+  syntheticTripIdFromMemoryId,
+} from "../../features/travel-stats/travelMemoryTripEquivalence";
+import { travelMemoriesRepository } from "../firebase/repositories/travelMemoriesRepository";
 import { tripsRepository } from "../firebase/repositories/tripsRepository";
 import { userPreferencesRepository } from "../firebase/repositories/userPreferencesRepository";
 import { getEnabledMusicPersonalization } from "../personalization/music/musicPersonalizationService";
@@ -126,6 +132,28 @@ const buildTripHistory = (trips: Trip[], behavior: TravelBehaviorProfile | null,
     durationDays: tripDurationDays(trip),
     executionScore: executionScoreForTrip(trip, behavior),
     endedAt: trip.dateRange.end,
+  }));
+};
+
+const memoryDurationDays = (memory: TravelMemory): number => {
+  const start = dayjs(memory.startDate);
+  const end = dayjs(memory.endDate);
+  const d = end.diff(start, "day") + 1;
+  return Math.max(1, Number.isFinite(d) ? d : 1);
+};
+
+/** Travel-memory backfills count like completed trips for home personalization signals. */
+const buildTripHistoryFromTravelMemories = (memories: TravelMemory[], max = 10): TripHistoryEntry[] => {
+  const eligible = memories.filter(isTravelMemoryEligibleForAggregates);
+  const sorted = [...eligible].sort((a, b) => dayjs(b.endDate).valueOf() - dayjs(a.endDate).valueOf());
+  return sorted.slice(0, max).map((mem) => ({
+    tripId: syntheticTripIdFromMemoryId(mem.id),
+    title: mem.geoLabel?.trim() || `${mem.city.trim()}, ${mem.country.trim()}`,
+    status: "completed" as const,
+    destinations: [{ city: mem.city.trim(), country: mem.country.trim() }],
+    durationDays: memoryDurationDays(mem),
+    executionScore: 0.88,
+    endedAt: mem.endDate,
   }));
 };
 
@@ -242,7 +270,7 @@ export const buildHomeSuggestionContext = async (userId: string): Promise<HomeSu
     throw new Error("buildHomeSuggestionContext requires a non-empty userId");
   }
 
-  const [privacy, trips, prefs, bucketItems, flickItems, musicBundle] = await Promise.all([
+  const [privacy, trips, prefs, bucketItems, flickItems, musicBundle, travelMemories] = await Promise.all([
     privacySettingsRepository.getPrivacySettings(uid).catch(() => null),
     tripsRepository.getUserTrips(uid).catch(() => [] as Trip[]),
     userPreferencesRepository.getPreferences(uid).catch(() => null),
@@ -254,6 +282,7 @@ export const buildHomeSuggestionContext = async (userId: string): Promise<HomeSu
       planningConfidence: "low" as const,
       profileFreshness: "none" as const,
     })),
+    travelMemoriesRepository.getUserTravelMemories(uid).catch(() => [] as TravelMemory[]),
   ]);
 
   const personalizationAllowed = shouldPersistTravelBehaviorProfile(privacy);
@@ -265,9 +294,15 @@ export const buildHomeSuggestionContext = async (userId: string): Promise<HomeSu
     : [null, null];
 
   const fallbackCurrency = prefs?.currency ?? "USD";
-  const history = buildTripHistory(trips, behaviorProfile, 10);
+  const historyFromTrips = buildTripHistory(trips, behaviorProfile, 10);
+  const historyFromMemories = buildTripHistoryFromTravelMemories(travelMemories, 10);
+  const tripHistory = [...historyFromTrips, ...historyFromMemories]
+    .sort((a, b) => dayjs(b.endedAt).valueOf() - dayjs(a.endedAt).valueOf())
+    .slice(0, 10);
   const lastTripDate =
-    history.length > 0 ? history.reduce((best, h) => (dayjs(h.endedAt).isAfter(dayjs(best)) ? h.endedAt : best), history[0]!.endedAt) : null;
+    tripHistory.length > 0
+      ? tripHistory.reduce((best, h) => (dayjs(h.endedAt).isAfter(dayjs(best)) ? h.endedAt : best), tripHistory[0]!.endedAt)
+      : null;
 
   const travelBehavior: TravelBehaviorSummary | null = behaviorProfile
     ? {
@@ -293,7 +328,7 @@ export const buildHomeSuggestionContext = async (userId: string): Promise<HomeSu
   return {
     userId: uid,
     travelBehavior,
-    tripHistory: history,
+    tripHistory,
     flickSync: summarizeFlickSync(flickItems),
     music,
     budget: computeBudgetPatterns(trips, fallbackCurrency),

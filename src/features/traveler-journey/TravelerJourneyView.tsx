@@ -15,13 +15,19 @@ import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 import { useTranslation } from "react-i18next";
+import type { TravelMemory } from "../../entities/travel-memory/model";
 import type { Trip } from "../../entities/trip/model";
+import { useTravelMemoryStore } from "../../app/store/useTravelMemoryStore";
 import { useUserPreferencesStore } from "../../app/store/useUserPreferencesStore";
 import { achievementRepository } from "../achievements/achievementRepository";
 import type { AchievementProgressDocument } from "../achievements/achievementRepository";
 import { bucketListRepository } from "../bucket-list/bucketListRepository";
 import type { BucketListItem } from "../bucket-list/bucketList.types";
 import { GlassPanel } from "../../shared/ui/GlassPanel";
+import {
+  isTravelMemoryEligibleForAggregates,
+  travelMemoryToSyntheticTrip,
+} from "../travel-stats/travelMemoryTripEquivalence";
 import {
   buildCountriesByTripId,
   buildTravelerJourney,
@@ -47,9 +53,18 @@ export function useTravelerJourneyData(userId: string | undefined, trips: Trip[]
   extrasLoading: boolean;
 } {
   const preferences = useUserPreferencesStore((s) => s.preferences);
+  const ensureMemories = useTravelMemoryStore((s) => s.ensureMemories);
+  const memoryIds = useTravelMemoryStore((s) => s.memoryIds);
+  const memoriesById = useTravelMemoryStore((s) => s.memoriesById);
   const [achievements, setAchievements] = useState<AchievementProgressDocument[]>([]);
   const [bucket, setBucket] = useState<BucketListItem[]>([]);
   const [extrasLoading, setExtrasLoading] = useState(false);
+
+  useEffect(() => {
+    if (userId?.trim()) {
+      void ensureMemories(userId);
+    }
+  }, [userId, ensureMemories]);
 
   useEffect(() => {
     if (!userId?.trim()) {
@@ -78,11 +93,21 @@ export function useTravelerJourneyData(userId: string | undefined, trips: Trip[]
 
   const homeCountry = preferences?.homeCity ? parseHomeCountryFromHomeCityLabel(preferences.homeCity) : "";
 
+  const travelMemories = useMemo(
+    () => memoryIds.map((id) => memoriesById[id]).filter((m): m is TravelMemory => Boolean(m)),
+    [memoryIds, memoriesById],
+  );
+
+  const tripsForJourney = useMemo(() => {
+    const synthetic = travelMemories.filter(isTravelMemoryEligibleForAggregates).map(travelMemoryToSyntheticTrip);
+    return [...trips, ...synthetic];
+  }, [trips, travelMemories]);
+
   return useMemo(() => {
-    const journey = buildTravelerJourney(trips, achievements, bucket, { homeCountry });
-    const countriesByTripId = buildCountriesByTripId(trips);
+    const journey = buildTravelerJourney(tripsForJourney, achievements, bucket, { homeCountry });
+    const countriesByTripId = buildCountriesByTripId(tripsForJourney);
     return { journey, countriesByTripId, extrasLoading };
-  }, [trips, achievements, bucket, homeCountry]);
+  }, [tripsForJourney, achievements, bucket, homeCountry]);
 }
 
 export type TravelerJourneyViewProps = {

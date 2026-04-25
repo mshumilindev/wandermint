@@ -34,6 +34,7 @@ import { ConfirmActionDialog } from "../../../shared/ui/ConfirmActionDialog";
 import type { GeneratedTripOptions } from "../../../services/ai/schemas";
 import { buildPlanExplanationUi } from "../../explainability/planExplanation.types";
 import { readAndConsumeBucketListTripPrefill } from "../../bucket-list/bucketListTripPrefill";
+import { readAndConsumeHomeSuggestionTripPrefill } from "../../home/homeSuggestionTripPrefill";
 import { validateAnchorEventDraft, validateTripDraft, type AnchorEventDraft } from "../validation/tripWizardValidation";
 import { mergeFoodDrinkPlannerSettings } from "../../../services/foodCulture/foodCultureDefaults";
 import { TripWizardRouteSection } from "../components/wizard/TripWizardRouteSection";
@@ -43,6 +44,7 @@ import { TripWizardBudgetSection } from "../components/wizard/TripWizardBudgetSe
 import { TripWizardReviewSection } from "../components/wizard/TripWizardReviewSection";
 import { TripWizardFoodCultureSection } from "../components/wizard/TripWizardFoodCultureSection";
 import { TripWizardStoryInspirationSection } from "../components/wizard/TripWizardStoryInspirationSection";
+import { FlightPlanField } from "../components/FlightPlanField";
 import { MusicInspiredSuggestionCard } from "../components/MusicInspiredSuggestionCard";
 import { TravelTimingWarningBanner } from "../components/TravelTimingWarningBanner";
 import { StoryExperienceStrip } from "../../storyTravel/components/StoryExperienceStrip";
@@ -52,6 +54,8 @@ import { applyEventLookupToAnchorEventDraft, isMultiDayEventResult } from "../..
 import { countryLabelToIsoCode } from "../../../shared/ui/CountryFlag";
 import type { EventLookupResult } from "../../../entities/events/eventLookup.model";
 import type { FestivalSelection } from "../../../entities/events/eventLookup.model";
+import { PlanningContextWidgets } from "../../planning-context/components/PlanningContextWidgets";
+import { resolvePlanningLocations } from "../../planning-context/resolvePlanningLocations";
 
 const createEmptySegment = () => ({
   id: createClientId("segment"),
@@ -152,6 +156,39 @@ export const NewTripPage = (): JSX.Element => {
   });
 
   const bucketPrefillAppliedRef = useRef(false);
+  const homePrefillAppliedRef = useRef(false);
+
+  useEffect(() => {
+    if (!user?.id || homePrefillAppliedRef.current) {
+      return;
+    }
+    const homePrefill = readAndConsumeHomeSuggestionTripPrefill();
+    if (homePrefill) {
+      homePrefillAppliedRef.current = true;
+      setDraft((current) => {
+        const tripSegments = current.tripSegments.map((segment, index) => {
+          if (index !== 0) {
+            return segment;
+          }
+          return {
+            ...segment,
+            city: homePrefill.segmentCity.trim(),
+            country: homePrefill.segmentCountry.trim(),
+            startDate: homePrefill.startDate,
+            endDate: homePrefill.endDate,
+          };
+        });
+        const destination = tripSegments.map((s) => s.city.trim()).filter(Boolean).join(" → ");
+        return {
+          ...current,
+          tripSegments,
+          dateRange: { start: homePrefill.startDate, end: homePrefill.endDate },
+          destination: destination || current.destination,
+        };
+      });
+      pushToast({ message: t("homeSuggestions.prefillTripToast"), tone: "info" });
+    }
+  }, [pushToast, t, user?.id]);
 
   useEffect(() => {
     if (!user?.id || bucketPrefillAppliedRef.current) {
@@ -543,6 +580,18 @@ export const NewTripPage = (): JSX.Element => {
     }
   };
 
+  const createPlanWidgetLocations = useMemo(
+    () =>
+      resolvePlanningLocations("create_plan", {
+        segments: draft.tripSegments.map((segment) => ({
+          id: segment.id,
+          city: segment.city,
+          country: segment.country,
+        })),
+      }),
+    [draft.tripSegments],
+  );
+
   return (
     <WizardShell>
       <Box sx={{ display: "grid", gap: 3 }}>
@@ -558,6 +607,13 @@ export const NewTripPage = (): JSX.Element => {
           onApplyDateRange={(range) => {
             setDraft((current) => shiftTripLikeDateRange(current, range));
           }}
+        />
+        <PlanningContextWidgets
+          flow="create_plan"
+          locations={createPlanWidgetLocations}
+          startDate={draft.dateRange.start || undefined}
+          endDate={draft.dateRange.end || undefined}
+          budgetAmount={draft.budget.amount}
         />
         <TripWizardRouteSection
           draft={draft}
@@ -579,6 +635,7 @@ export const NewTripPage = (): JSX.Element => {
           onRemoveSegmentRequest={(id) => setSegmentToRemove(id)}
           onRemoveAnchorRequest={(id) => setAnchorEventToRemove(id)}
         />
+        <FlightPlanField draft={draft} patchDraft={patchDraft} />
         <TripWizardTravelStyleSection draft={draft} patchDraft={patchDraft} toggleVibe={toggleVibe} />
         <TripWizardPartyPaceSection draft={draft} patchDraft={patchDraft} />
         <TripWizardBudgetSection draft={draft} tripValidation={tripValidation} patchDraft={patchDraft} />

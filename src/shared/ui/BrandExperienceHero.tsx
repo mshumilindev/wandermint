@@ -95,6 +95,10 @@ export const BrandExperienceHero = ({ variant = "standard", sx }: BrandExperienc
           opacity: 0.5,
           zIndex: 1,
           pointerEvents: "none",
+          "@keyframes wmHeroPathFlow": {
+            "0%": { strokeDashoffset: 0 },
+            "100%": { strokeDashoffset: -18 },
+          },
         }}
       >
         <path d="M 0 18 C 16 4, 30 6, 44 17 S 72 27, 100 10" fill="none" stroke="rgba(183, 237, 226, 0.35)" strokeWidth="0.26" />
@@ -104,13 +108,7 @@ export const BrandExperienceHero = ({ variant = "standard", sx }: BrandExperienc
           stroke="rgba(183, 237, 226, 0.7)"
           strokeWidth="0.22"
           strokeDasharray="1.2 1.5"
-          sx={{
-            animation: "wmHeroPathFlow 14s linear infinite",
-            "@keyframes wmHeroPathFlow": {
-              "0%": { strokeDashoffset: 0 },
-              "100%": { strokeDashoffset: -18 },
-            },
-          }}
+          style={{ animation: "wmHeroPathFlow 14s linear infinite" }}
         />
       </Box>
       <Box

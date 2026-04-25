@@ -23,6 +23,7 @@ import { TravelStatsPage } from "../../features/travel-stats/routes/TravelStatsP
 import { AchievementsPage } from "../../features/achievements/routes/AchievementsPage";
 import { AnalyticsDashboardPage } from "../../features/analytics/routes/AnalyticsDashboardPage";
 import { ShareTripPage } from "../../features/share/ShareTripPage";
+import { FriendsPage } from "../../features/friends/routes/FriendsPage";
 
 const rootRoute = createRootRoute({
   errorComponent: ({ error, reset }) => <AppErrorBoundary error={error} reset={reset} />,
@@ -126,6 +127,12 @@ const bucketListRoute = createRoute({
   component: BucketListPage,
 });
 
+const friendsRoute = createRoute({
+  getParentRoute: () => protectedRoute,
+  path: "friends",
+  component: FriendsPage,
+});
+
 const achievementsRoute = createRoute({
   getParentRoute: () => protectedRoute,
   path: "achievements",
@@ -179,6 +186,7 @@ const routeTree = rootRoute.addChildren([
     travelMapRoute,
     savedRoute,
     bucketListRoute,
+    friendsRoute,
     achievementsRoute,
     analyticsRoute,
     settingsPrivacyRoute,

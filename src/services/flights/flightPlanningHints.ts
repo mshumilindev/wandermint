@@ -28,10 +28,17 @@ const lastSegment = (draft: FlightPlanningDraftSlice): { city: string; country: 
 
 const buildInboundClause = (draft: FlightPlanningDraftSlice, inbound: FlightSegment): string[] => {
   const { city } = firstSegment(draft);
-  const range = city ? arrivalAirportToCityRange(inbound.arrivalAirport, city) : { min: 45, max: 75, note: "Allow surface transfer from arrival airport to base." };
-  const arrivalEnd = dayjs(inbound.arrivalTime).add(ARRIVAL_BUFFER_MIN, "minute");
+  const arrAirport = toLegacyAirport(inbound.arrivalAirport);
+  const depAirport = toLegacyAirport(inbound.departureAirport);
+  if (!arrAirport || !depAirport) {
+    return [];
+  }
+  const range = city ? arrivalAirportToCityRange(arrAirport, city) : { min: 45, max: 75, note: "Allow surface transfer from arrival airport to base." };
+  const arrivalTime = inbound.scheduledArrivalTime ?? inbound.arrivalTime ?? "";
+  const departureTime = inbound.scheduledDepartureTime ?? inbound.departureTime ?? "";
+  const arrivalEnd = dayjs(arrivalTime).add(ARRIVAL_BUFFER_MIN, "minute");
   return [
-    `INBOUND FLIGHT ${inbound.flightNumber}: dep ${inbound.departureAirport.iataCode} (${inbound.departureAirport.name}) ${formatIsoHint(inbound.departureTime)} → arr ${inbound.arrivalAirport.iataCode} (${inbound.arrivalAirport.name}) ${formatIsoHint(inbound.arrivalTime)}.`,
+    `INBOUND FLIGHT ${inbound.flightNumber}: dep ${depAirport.iataCode} (${depAirport.name}) ${formatIsoHint(departureTime)} → arr ${arrAirport.iataCode} (${arrAirport.name}) ${formatIsoHint(arrivalTime)}.`,
     `Arrival-day rule: do not schedule deep activities before ~${formatIsoHint(arrivalEnd.toISOString())} (arrival + ${ARRIVAL_BUFFER_MIN}m buffer for baggage + curb).`,
     `Airport→base surface band: ~${range.min}–${range.max} min — ${range.note}`,
     "Reduce first-day density after this window; route first stops toward the stay from the arrival airport vector.",
@@ -40,14 +47,36 @@ const buildInboundClause = (draft: FlightPlanningDraftSlice, inbound: FlightSegm
 
 const buildOutboundClause = (draft: FlightPlanningDraftSlice, outbound: FlightSegment): string[] => {
   const { city } = lastSegment(draft);
-  const range = city ? cityToDepartureAirportRange(city, outbound.departureAirport) : { min: 45, max: 75, note: "Allow travel to departure airport." };
-  const leaveBy = dayjs(outbound.departureTime).subtract(DEPARTURE_BUFFER_MIN + range.max, "minute");
+  const depAirport = toLegacyAirport(outbound.departureAirport);
+  const arrAirport = toLegacyAirport(outbound.arrivalAirport);
+  if (!arrAirport || !depAirport) {
+    return [];
+  }
+  const range = city ? cityToDepartureAirportRange(city, depAirport) : { min: 45, max: 75, note: "Allow travel to departure airport." };
+  const departureTime = outbound.scheduledDepartureTime ?? outbound.departureTime ?? "";
+  const arrivalTime = outbound.scheduledArrivalTime ?? outbound.arrivalTime ?? "";
+  const leaveBy = dayjs(departureTime).subtract(DEPARTURE_BUFFER_MIN + range.max, "minute");
   return [
-    `OUTBOUND (RETURN) FLIGHT ${outbound.flightNumber}: dep ${outbound.departureAirport.iataCode} (${outbound.departureAirport.name}) ${formatIsoHint(outbound.departureTime)} → arr ${outbound.arrivalAirport.iataCode} (${outbound.arrivalAirport.name}) ${formatIsoHint(outbound.arrivalTime)}.`,
-    `Departure-day rule: end distant / high-friction activities so the traveler can reach ${outbound.departureAirport.iataCode} with ~${DEPARTURE_BUFFER_MIN}m airport buffer after a ~${range.max}m worst-case surface leg — target finishing heavy plans before ~${formatIsoHint(leaveBy.toISOString())}.`,
+    `OUTBOUND (RETURN) FLIGHT ${outbound.flightNumber}: dep ${depAirport.iataCode} (${depAirport.name}) ${formatIsoHint(departureTime)} → arr ${arrAirport.iataCode} (${arrAirport.name}) ${formatIsoHint(arrivalTime)}.`,
+    `Departure-day rule: end distant / high-friction activities so the traveler can reach ${depAirport.iataCode} with ~${DEPARTURE_BUFFER_MIN}m airport buffer after a ~${range.max}m worst-case surface leg — target finishing heavy plans before ~${formatIsoHint(leaveBy.toISOString())}.`,
     `Base→airport surface band: ~${range.min}–${range.max} min — ${range.note}`,
     "Last day: no far-field excursions after mid-day unless timing still clears the buffers above.",
   ];
+};
+
+const toLegacyAirport = (airport: FlightSegment["departureAirport"]):
+  | { iataCode: string; name: string; city: string; country: string; coordinates: { lat: number; lng: number } }
+  | null => {
+  if (!airport.code || !airport.name || !airport.city || !airport.country || !airport.coordinates) {
+    return null;
+  }
+  return {
+    iataCode: airport.code,
+    name: airport.name,
+    city: airport.city,
+    country: airport.country,
+    coordinates: airport.coordinates,
+  };
 };
 
 export const buildFlightPlanningClause = (draft: FlightPlanningDraftSlice): string => {

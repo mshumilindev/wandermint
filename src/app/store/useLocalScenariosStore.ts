@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { LocalScenario } from "../../entities/local-scenario/model";
+import type { RightNowSocialContext } from "../../entities/friend/model";
 import type { PlaceExperienceMemory } from "../../entities/place-memory/model";
 import type { TravelMemory } from "../../entities/travel-memory/model";
 import type { UserPreferences } from "../../entities/user/model";
@@ -41,6 +42,7 @@ interface LocalScenariosState {
     travelMemories?: TravelMemory[];
     placeMemories?: PlaceExperienceMemory[];
     foodDrinkPlanner?: FoodDrinkPlannerSettings | null;
+    socialContext?: RightNowSocialContext;
   }) => Promise<void>;
   saveScenario: (userId: string, scenarioId: string) => Promise<void>;
   patchScenario: (scenarioId: string, scenario: LocalScenario) => void;

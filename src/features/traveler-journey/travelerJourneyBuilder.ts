@@ -1,4 +1,5 @@
 import type { Trip } from "../../entities/trip/model";
+import { isSyntheticTravelMemoryTripId } from "../travel-stats/travelMemoryTripEquivalence";
 import { ACHIEVEMENT_DEFINITIONS } from "../achievements/achievement.definitions";
 import type { AchievementProgressDocument } from "../achievements/achievementRepository";
 import type { BucketListItem } from "../bucket-list/bucketList.types";
@@ -55,6 +56,9 @@ function isInternationalTrip(trip: Trip, home: string): boolean {
 }
 
 function isSoloTrip(trip: Trip): boolean {
+  if (isSyntheticTravelMemoryTripId(trip.id)) {
+    return false;
+  }
   return trip.preferences?.partyComposition === "solo";
 }
 
