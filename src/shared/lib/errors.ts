@@ -1,4 +1,5 @@
 import type { ZodIssue } from "zod";
+import { FirebaseError } from "firebase/app";
 import {
   AiGatewayError,
   AiValidationError,
@@ -56,6 +57,15 @@ export const debugLogError = (label: string, error: unknown): void => {
 };
 
 export const getErrorMessage = (error: unknown): string => {
+  if (error instanceof FirebaseError) {
+    if (error.code === "permission-denied") {
+      return "You do not have permission for this action in the current project. Check Firestore rules for your signed-in user.";
+    }
+    if (error.code === "unauthenticated") {
+      return "Please sign in again to continue.";
+    }
+  }
+
   if (error instanceof AiGatewayError) {
     const status = error.context.statusCode;
     const msg = error.message.toLowerCase();

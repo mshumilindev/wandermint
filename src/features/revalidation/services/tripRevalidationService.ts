@@ -7,7 +7,7 @@ import { publicWeatherProvider } from "../../../services/providers/publicWeather
 
 export const tripRevalidationService = {
   revalidateTrip: async (trip: Trip, days: DayPlan[]): Promise<PlanWarning[]> => {
-    const forecast = await publicWeatherProvider.getForecast(trip.destination, trip.dateRange);
+    const forecast = await publicWeatherProvider.getForecast(trip.destination, trip.dateRange).catch(() => []);
     const rainy = forecast.some((item) => item.precipitationChance >= 30);
     const outdoorBlocks = days.flatMap((day) => day.blocks.filter((block) => block.dependencies.weatherSensitive));
 

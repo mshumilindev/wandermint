@@ -81,6 +81,39 @@ export type TripGenerationServiceResult = GeneratedTripOptions & {
   musicEventSuggestions?: MusicEventSuggestion[];
 };
 
+const buildPartialForecastFallback = (locationLabel: string, dateRange: { start: string; end: string }): WeatherContext[] => {
+  const start = new Date(`${dateRange.start}T00:00:00Z`);
+  const end = new Date(`${dateRange.end}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) {
+    return [
+      {
+        locationLabel: `${locationLabel} ${dateRange.start || "date"}`,
+        temperatureC: 20,
+        condition: "Variable conditions",
+        precipitationChance: 20,
+        windKph: 10,
+        observedAt: new Date().toISOString(),
+        certainty: "partial",
+      },
+    ];
+  }
+  const out: WeatherContext[] = [];
+  const cursor = new Date(start.getTime());
+  while (cursor <= end && out.length < 21) {
+    out.push({
+      locationLabel: `${locationLabel} ${cursor.toISOString().slice(0, 10)}`,
+      temperatureC: 20,
+      condition: "Variable conditions",
+      precipitationChance: 20,
+      windKph: 10,
+      observedAt: new Date().toISOString(),
+      certainty: "partial",
+    });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return out;
+};
+
 const classifyTripGenerationFailure = (
   error: unknown,
 ): { errorKind: string; flow?: string; statusCode?: number; errorCode?: string } => {
@@ -679,7 +712,10 @@ export const tripGenerationService = {
     const primarySegment = generationDraft.tripSegments[0];
     const primaryLocation = primarySegment ? `${primarySegment.city}, ${primarySegment.country}` : generationDraft.destination;
     callbacks?.onStep?.("checking_forecast");
-    const forecast = await publicWeatherProvider.getForecast(primaryLocation, generationDraft.dateRange);
+    const forecast = await publicWeatherProvider.getForecast(primaryLocation, generationDraft.dateRange).catch((error) => {
+      debugLogError("trip_generation_forecast_fallback", error);
+      return buildPartialForecastFallback(primaryLocation, generationDraft.dateRange);
+    });
     callbacks?.onStep?.("finding_city_signals");
     const mustSeeForDiscovery = [
       generationDraft.preferences.mustSeeNotes,

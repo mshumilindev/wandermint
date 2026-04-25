@@ -14,4 +14,6 @@ export interface LocalScenario {
   alternatives: string[];
   createdAt: string;
   savedAt?: string;
+  /** One-line curated food/drink signal for right-now cards. */
+  foodCultureTeaser?: string;
 }

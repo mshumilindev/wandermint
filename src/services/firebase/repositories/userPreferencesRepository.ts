@@ -4,7 +4,9 @@ import type { AvoidConstraint, PreferenceProfile, RightNowExploreSpeed, UserPref
 import { firestoreCollections } from "../../../shared/config/product";
 import { firestoreDb } from "../firebaseApp";
 import { nowIso, timestampToIso } from "../timestampMapper";
-import { defaultPreferenceProfile, mergePreferenceProfile } from "../preferences/preferenceConstraintsService";
+import { defaultPreferenceProfile, mergePreferenceProfile } from "../../preferences/preferenceConstraintsService";
+import { defaultStoryTravelPreferences, mergeStoryTravelPreferences } from "../../storyTravel/storyTravelDefaults";
+import type { StoryTravelPreferences } from "../../storyTravel/storyTravelTypes";
 
 const avoidConstraintSchema: z.ZodType<AvoidConstraint> = z.discriminatedUnion("type", [
   z.object({ type: z.literal("country"), value: z.string().max(160) }),
@@ -31,6 +33,10 @@ const userPreferencesSchema = z.object({
   avoids: z.array(z.string()),
   trackAchievements: z.boolean().optional(),
   allowPersonalAnalytics: z.boolean().optional(),
+  storyTravel: z
+    .unknown()
+    .optional()
+    .transform((val) => mergeStoryTravelPreferences(val as Partial<StoryTravelPreferences> | null)),
   preferenceProfile: z
     .unknown()
     .optional()
@@ -56,6 +62,7 @@ const withResolvedExploreSpeed = (data: z.infer<typeof userPreferencesSchema>): 
   rightNowExploreSpeed: resolveRightNowExploreSpeed(data),
   allowPersonalAnalytics: data.allowPersonalAnalytics ?? false,
   trackAchievements: data.trackAchievements ?? true,
+  storyTravel: mergeStoryTravelPreferences(data.storyTravel),
 });
 
 const createDefaultPreferences = (userId: string): UserPreferences => ({
@@ -71,6 +78,7 @@ const createDefaultPreferences = (userId: string): UserPreferences => ({
   avoids: [],
   trackAchievements: true,
   allowPersonalAnalytics: false,
+  storyTravel: defaultStoryTravelPreferences(),
   preferenceProfile: defaultPreferenceProfile(),
   updatedAt: nowIso(),
 });

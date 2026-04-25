@@ -3,9 +3,12 @@ import { Alert, Box, Button, Divider, Typography } from "@mui/material";
 import dayjs from "dayjs";
 import { useTranslation } from "react-i18next";
 import type { TripDraft } from "../../../../services/planning/tripGenerationService";
+import { formatUserFriendlyDateRange } from "../../../../shared/lib/dateDisplay";
 import { formatBudgetAmountLabel } from "../../../../shared/lib/priceDisplay";
 import { sanitizeUserFacingLine } from "../../../../shared/lib/userFacingText";
 import type { UserPreferences } from "../../../../entities/user/model";
+import { mergeFoodDrinkPlannerSettings } from "../../../../services/foodCulture/foodCultureDefaults";
+import { foodStrategyShortLabel } from "../../../food-culture/components/FoodCultureBadge";
 import { GlassPanel } from "../../../../shared/ui/GlassPanel";
 import { WizardSectionHeader } from "./WizardSectionHeader";
 
@@ -44,9 +47,9 @@ export const TripWizardReviewSection = ({
 
   const datesLabel =
     draft.planningMode === "event_led" && eventLedStart && eventLedEnd
-      ? `${eventLedStart} → ${eventLedEnd}`
+      ? formatUserFriendlyDateRange(eventLedStart, eventLedEnd)
       : draft.dateRange.start && draft.dateRange.end
-        ? `${draft.dateRange.start} → ${draft.dateRange.end}`
+        ? formatUserFriendlyDateRange(draft.dateRange.start, draft.dateRange.end)
         : draft.tripSegments.some((s) => s.startDate && s.endDate)
           ? t("wizard.review.datesFromStops")
           : t("wizard.review.noDates");
@@ -66,6 +69,12 @@ export const TripWizardReviewSection = ({
     ? sanitizeUserFacingLine(mustSeeLine.length > 160 ? `${mustSeeLine.slice(0, 160)}…` : mustSeeLine)
     : t("wizard.review.noMustSee");
 
+  const foodPlanner = mergeFoodDrinkPlannerSettings(draft.preferences.foodDrinkPlanner);
+  const foodStrategySummary = [
+    foodStrategyShortLabel(foodPlanner.primaryFoodDrinkStrategy),
+    ...foodPlanner.secondaryFoodDrinkStrategies.map(foodStrategyShortLabel),
+  ].join(" · ");
+
   return (
     <GlassPanel
       elevated
@@ -77,7 +86,7 @@ export const TripWizardReviewSection = ({
         background: "linear-gradient(145deg, rgba(0, 180, 216, 0.08), rgba(3, 15, 23, 0.55))",
       }}
     >
-      <WizardSectionHeader index={5} title={t("wizard.sections.reviewGenerate")} subtitle={t("wizard.sections.reviewGenerateSubtitle")} />
+      <WizardSectionHeader index={7} title={t("wizard.sections.reviewGenerate")} subtitle={t("wizard.sections.reviewGenerateSubtitle")} />
 
       {!tripValidation.isValid && tripValidation.message ? <Alert severity="warning">{tripValidation.message}</Alert> : null}
 
@@ -103,6 +112,8 @@ export const TripWizardReviewSection = ({
         />
         <Divider sx={{ borderColor: "rgba(255,255,255,0.06)" }} />
         <ReviewRow label={t("wizard.review.pace")} value={paceLabel} />
+        <Divider sx={{ borderColor: "rgba(255,255,255,0.06)" }} />
+        <ReviewRow label={t("wizard.review.foodStrategy")} value={foodStrategySummary} />
         <Divider sx={{ borderColor: "rgba(255,255,255,0.06)" }} />
         <ReviewRow
           label={t("wizard.food")}

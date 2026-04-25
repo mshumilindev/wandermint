@@ -84,6 +84,8 @@ export const buildLocalScenarioPrompt = (
   planningContext?: PlanningContext,
   timeContext?: LocalScenarioTimeContext,
   exploreSpeed: RightNowExploreSpeed = "balanced",
+  foodCultureAppendix?: string,
+  storyTravelAppendix?: string,
 ): string => {
   const bounds = getRightNowBlockBounds(availableMinutes, exploreSpeed);
   return [
@@ -105,5 +107,9 @@ export const buildLocalScenarioPrompt = (
     `Available minutes: ${availableMinutes}`,
     `Weather: ${weather.condition}, ${weather.precipitationChance}% precipitation, certainty ${weather.certainty}`,
     `Memory guidance: ${planningContext?.promptGuidance.join(" | ") ?? "Prefer novelty by ranking, not hard filtering."}`,
-  ].join("\n");
+    foodCultureAppendix?.trim() ? `FOOD & DRINK CONTEXT (curated + strategy — keep tips short and route-relevant):\n${foodCultureAppendix.trim()}` : "",
+    storyTravelAppendix?.trim() ? storyTravelAppendix.trim() : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 };

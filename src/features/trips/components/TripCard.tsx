@@ -5,6 +5,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import type { Trip } from "../../../entities/trip/model";
 import { useUserPreferencesStore } from "../../../app/store/useUserPreferencesStore";
+import { formatUserFriendlyDateRange } from "../../../shared/lib/dateDisplay";
 import { formatBudgetAmountLabel } from "../../../shared/lib/priceDisplay";
 import { EntityPreviewImage } from "../../../shared/ui/EntityPreviewImage";
 import { GlassPanel } from "../../../shared/ui/GlassPanel";
@@ -49,7 +50,11 @@ export const TripCard = ({ trip, warningCount = 0, actionLabel, deleteLabel, onD
         <StatusBadge status={trip.status} />
       </Box>
     <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-      <MetadataPill icon={<CalendarMonthOutlinedIcon />} label={`${trip.dateRange.start} - ${trip.dateRange.end}`} tone="teal" />
+      <MetadataPill
+        icon={<CalendarMonthOutlinedIcon />}
+        label={formatUserFriendlyDateRange(trip.dateRange.start, trip.dateRange.end)}
+        tone="teal"
+      />
       <MetadataPill label={`${trip.tripSegments.length} ${trip.tripSegments.length === 1 ? "city" : "cities"}`} tone="teal" />
       <MetadataPill icon={<HealthAndSafetyOutlinedIcon />} label={t("trips.warningCount", { count: warningCount })} tone={warningCount > 0 ? "amber" : "default"} />
       <MetadataPill label={budgetLabel} />

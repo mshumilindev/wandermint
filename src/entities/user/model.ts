@@ -1,3 +1,5 @@
+import type { StoryTravelPreferences } from "../../services/storyTravel/storyTravelTypes";
+
 export interface AuthUser {
   id: string;
   displayName: string;
@@ -66,5 +68,7 @@ export interface UserPreferences {
   allowPersonalAnalytics?: boolean;
   /** Structured avoid/prefer constraints — applies to suggestions, generation, and routing hints. */
   preferenceProfile?: PreferenceProfile;
+  /** Optional story / literary / adaptation inspiration layer (defaults applied when omitted). */
+  storyTravel?: StoryTravelPreferences;
   updatedAt: string;
 }

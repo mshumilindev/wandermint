@@ -3,6 +3,8 @@ import type { ActivityAlternative, ActivityBlock, CostRange, PlaceSnapshot } fro
 import type { PlaceExperienceMemory } from "../../entities/place-memory/model";
 import type { TravelMemory } from "../../entities/travel-memory/model";
 import type { RightNowExploreSpeed, UserPreferences } from "../../entities/user/model";
+import type { FoodCultureLayer } from "../../entities/food-culture/model";
+import type { FoodDrinkPlannerSettings } from "../../entities/food-culture/model";
 import { createClientId } from "../../shared/lib/id";
 import { NotEnoughGroundedDataError } from "../../shared/lib/appErrors";
 import { debugLogError } from "../../shared/lib/errors";
@@ -29,6 +31,14 @@ import { sanitizeUserFacingDescription, sanitizeUserFacingLine } from "../../sha
 import { buildPlanningContext } from "./planningContextBuilder";
 import { buildMusicPlanningSignals, getEnabledMusicPersonalization } from "../personalization/music/musicPersonalizationService";
 import type { MusicPlanningSignals } from "../../integrations/music/musicTypes";
+import { mergeFoodDrinkPlannerSettings } from "../foodCulture/foodCultureDefaults";
+import { buildFoodCultureLayer } from "../foodCulture/foodCultureLayerBuilder";
+import { getOrBuildFoodCultureLayer } from "../foodCulture/foodCultureCache";
+import { formatFoodCultureForRightNowPrompt } from "../foodCulture/foodCulturePromptForAi";
+import { adjustFoodCandidateScores } from "../foodCulture/adjustFoodCandidateScores";
+import { flickSyncLibraryRepository } from "../flicksync/flickSyncLibraryRepository";
+import { formatStoryTravelPromptAppendix, refineStoryTravelExperiences } from "../storyTravel/storyTravelAiLayer";
+import { flickTitleSignalsForStoryLayer, storySuggestionsForRightNow } from "../storyTravel/storyTravelSuggestionService";
 
 interface LocalScenarioRequest {
   userId?: string;
@@ -42,6 +52,8 @@ interface LocalScenarioRequest {
   userPreferences?: UserPreferences | null;
   travelMemories?: TravelMemory[];
   placeMemories?: PlaceExperienceMemory[];
+  /** Optional override; defaults to balanced planner + user avoids/interests. */
+  foodDrinkPlanner?: FoodDrinkPlannerSettings | null;
 }
 
 const resolveExploreSpeed = (prefs?: UserPreferences | null): RightNowExploreSpeed => prefs?.rightNowExploreSpeed ?? "balanced";
@@ -142,8 +154,18 @@ const distanceMetersFromPoint = (latitude: number, longitude: number, place: Pla
 
 const normalizeToken = (value: string): string => value.trim().toLowerCase();
 
+const isCoordinateLikeToken = (value: string | undefined): boolean => {
+  if (!value) {
+    return false;
+  }
+  return /^-?\d+(?:\.\d+)?$/.test(value.trim());
+};
+
 const parseLocationContext = (locationLabel: string, availableMinutes: number): LocalAreaContext => {
-  const [city, country] = locationLabel.split(",").map((item) => item.trim());
+  const [cityRaw, countryRaw] = locationLabel.split(",").map((item) => item.trim());
+  // Reverse-geocode fallback can be "lat, lng" — don't treat numeric tokens as city/country filters.
+  const city = isCoordinateLikeToken(cityRaw) ? undefined : cityRaw;
+  const country = isCoordinateLikeToken(countryRaw) ? undefined : countryRaw;
   return {
     city: city || undefined,
     country: country || undefined,
@@ -762,6 +784,7 @@ const buildRankedScenarios = (
   route: RouteContext,
   discovery: DestinationDiscovery,
   planningContext: ReturnType<typeof buildPlanningContext>,
+  foodCultureLayer: FoodCultureLayer | null,
 ): GeneratedLocalScenarios["scenarios"] => {
   const usesIndoorPlan = weather.precipitationChance >= 45 || request.vibe.toLowerCase().includes("rain");
   const mustSeeHints = discovery.mustSee;
@@ -843,6 +866,13 @@ const buildRankedScenarios = (
         averageDistance / 80 +
         optimized.metrics.score;
 
+      const teaser =
+        foodCultureLayer && foodCultureLayer.summary.trim().length > 0
+          ? sanitizeUserFacingLine(
+              foodCultureLayer.summary.length > 180 ? `${foodCultureLayer.summary.slice(0, 177)}…` : foodCultureLayer.summary,
+            )
+          : undefined;
+
       rankedScenarios.push({
         id: createClientId("scenario"),
         userId: request.userId,
@@ -853,6 +883,7 @@ const buildRankedScenarios = (
         weatherFit: weatherFit(weather, usesIndoorPlan),
         routeLogic: sanitizeUserFacingDescription(composeScenarioRouteLogic(averageDistance, route, optimized.metrics.summary)),
         blocks: contextualBlocks,
+        foodCultureTeaser: teaser,
         alternatives: [
           ...scenarioAlternatives(discoveryPlaces(discovery)),
           ...scenarioAlternatives(mustSeeHints),
@@ -918,11 +949,34 @@ const buildStageResult = (
   bundledPlaces: Array<{ kind: CandidateKind; places: PlaceSnapshot[] }>,
   discovery: DestinationDiscovery,
   groundedPlaces: PlaceSnapshot[],
-  spendTier?: RightNowSpendTier,
-): LocalSearchStageResult => ({
-  groundedPlaces: uniquePlaces(groundedPlaces).slice(0, 24),
-  rankedPools: buildCandidatePools(point, vibe, bundledPlaces, discovery, spendTier),
-});
+  spendTier: RightNowSpendTier | undefined,
+  foodCtx: {
+    planner: FoodDrinkPlannerSettings;
+    city: string;
+    country: string;
+    foodInterests: string[];
+    avoids: string[];
+  },
+): LocalSearchStageResult => {
+  const layer = getOrBuildFoodCultureLayer({
+    city: foodCtx.city,
+    country: foodCtx.country,
+    planner: foodCtx.planner,
+    foodInterests: foodCtx.foodInterests,
+    avoids: foodCtx.avoids,
+    build: () => buildFoodCultureLayer({ city: foodCtx.city, country: foodCtx.country, planner: foodCtx.planner }),
+  });
+  const rawPools = buildCandidatePools(point, vibe, bundledPlaces, discovery, spendTier);
+  return {
+    groundedPlaces: uniquePlaces(groundedPlaces).slice(0, 24),
+    rankedPools: {
+      ...rawPools,
+      food: adjustFoodCandidateScores(rawPools.food, layer, foodCtx.planner, foodCtx.foodInterests, foodCtx.avoids),
+      drinks: adjustFoodCandidateScores(rawPools.drinks, layer, foodCtx.planner, foodCtx.foodInterests, foodCtx.avoids),
+      cafe: adjustFoodCandidateScores(rawPools.cafe, layer, foodCtx.planner, foodCtx.foodInterests, foodCtx.avoids),
+    },
+  };
+};
 
 export const localScenarioService = {
   generateScenarios: async (request: LocalScenarioRequest, hooks?: LocalScenarioGenerationHooks): Promise<GeneratedLocalScenarios> => {
@@ -965,6 +1019,7 @@ export const localScenarioService = {
           avoids: request.userPreferences?.avoids ?? [],
           mustSeeNotes: "",
           specialWishes: "",
+          foodDrinkPlanner: mergeFoodDrinkPlannerSettings(request.foodDrinkPlanner ?? undefined),
         },
         budget: {
           amount: 0,
@@ -982,6 +1037,22 @@ export const localScenarioService = {
     hooks?.onStep?.("checking_weather");
     const weather = await publicWeatherProvider.getCurrentWeatherAt(point).catch(() => fallbackWeather(point.label));
     const localArea = parseLocationContext(point.label, request.availableMinutes);
+    const planner = mergeFoodDrinkPlannerSettings(request.foodDrinkPlanner ?? undefined);
+    const foodCtx = {
+      planner,
+      city: localArea.city ?? point.label.split(",")[0]?.trim() ?? "",
+      country: localArea.country ?? point.label.split(",")[1]?.trim() ?? "",
+      foodInterests: request.userPreferences?.foodInterests ?? [],
+      avoids: request.userPreferences?.avoids ?? [],
+    };
+    const rightNowFoodLayer = getOrBuildFoodCultureLayer({
+      city: foodCtx.city,
+      country: foodCtx.country,
+      planner: foodCtx.planner,
+      foodInterests: foodCtx.foodInterests,
+      avoids: foodCtx.avoids,
+      build: () => buildFoodCultureLayer({ city: foodCtx.city, country: foodCtx.country, planner: foodCtx.planner }),
+    });
 
     hooks?.onStep?.("finding_nearby_places");
     const spendTier = request.rightNowSpendTier ?? "flexible";
@@ -1009,6 +1080,7 @@ export const localScenarioService = {
         ...strictDiscoveryPlaces,
       ],
       spendTier,
+      foodCtx,
     );
 
     const relaxedBundledPlaces = strictStage.groundedPlaces.length > 0
@@ -1035,6 +1107,7 @@ export const localScenarioService = {
           ...relaxedDiscoveryPlaces,
         ],
         spendTier,
+        foodCtx,
       );
 
     const discoveryFallbackPlaces = relaxedStage.groundedPlaces.length > 0
@@ -1049,6 +1122,7 @@ export const localScenarioService = {
         discovery,
         discoveryFallbackPlaces,
         spendTier,
+        foodCtx,
       );
 
     const groundedStage = strictStage.groundedPlaces.length > 0
@@ -1077,6 +1151,34 @@ export const localScenarioService = {
       spendTier,
     };
     const exploreSpeed = resolveExploreSpeed(request.userPreferences);
+    let flickInterestSignals: string[] = [];
+    if (request.userId?.trim()) {
+      try {
+        const lib = await flickSyncLibraryRepository.getUserLibrary(request.userId.trim(), 48);
+        flickInterestSignals = flickTitleSignalsForStoryLayer(lib);
+      } catch {
+        flickInterestSignals = [];
+      }
+    }
+    const storyRaw = storySuggestionsForRightNow({
+      city: foodCtx.city,
+      country: foodCtx.country,
+      availableMinutes: request.availableMinutes,
+      flickInterestSignals,
+      prefs: request.userPreferences ?? null,
+    });
+    const storyRefined = refineStoryTravelExperiences(
+      storyRaw,
+      {
+        tripDurationDays: 1,
+        pace: "balanced",
+        budgetStyle: "balanced",
+        primaryCity: foodCtx.city,
+        primaryCountry: foodCtx.country,
+      },
+      1,
+    );
+    const storyTravelAppendix = formatStoryTravelPromptAppendix(storyRefined);
     const prompt = buildLocalScenarioPrompt(
       point.label,
       request.vibe,
@@ -1086,12 +1188,26 @@ export const localScenarioService = {
       planningContext,
       timeContext,
       exploreSpeed,
+      formatFoodCultureForRightNowPrompt(rightNowFoodLayer, planner, timeContext.hour),
+      storyTravelAppendix,
     );
     const allowFoodCrawl = detectFoodCrawlIntent(request.vibe);
 
     hooks?.onStep?.("composing_scenarios");
     const localEngineScenarioList = groundedPlaces.length > 0
-      ? await attachMovementLegs(buildRankedScenarios(request, point, localArea, weather, groundedStage.rankedPools, route, discovery, planningContext))
+      ? await attachMovementLegs(
+        buildRankedScenarios(
+          request,
+          point,
+          localArea,
+          weather,
+          groundedStage.rankedPools,
+          route,
+          discovery,
+          planningContext,
+          rightNowFoodLayer,
+        ),
+      )
       : [];
     const localEngineScenarios = generatedLocalScenariosSchema.parse({ scenarios: localEngineScenarioList });
     const emitBatches = async (scenarios: GeneratedLocalScenarios["scenarios"], total: number): Promise<void> => {

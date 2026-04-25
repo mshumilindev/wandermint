@@ -66,6 +66,7 @@ export const activityBlockSchema = z.object({
   completionStatus: z.enum(["pending", "in_progress", "unconfirmed", "done", "skipped", "missed", "cancelled_by_replan"]),
   normalizedTripPlanItem: normalizedTripPlanItemSchema.optional(),
   safetyWarningAcknowledged: z.boolean().optional(),
+  foodCultureNotes: z.array(z.string().max(160)).max(2).optional(),
 });
 
 export const movementOptionSchema = z.object({

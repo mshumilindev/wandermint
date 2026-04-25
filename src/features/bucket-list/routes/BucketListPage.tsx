@@ -418,13 +418,13 @@ export const BucketListPage = (): JSX.Element => {
             {t("bucketList.editHint")}
           </Typography>
           <TextField
-            label={editing.payload.type === "experience" ? t("bucketList.experienceLabel") : t("bucketList.fieldTitle")}
+            label={editing?.payload.type === "experience" ? t("bucketList.experienceLabel") : t("bucketList.fieldTitle")}
             value={editTitle}
             onChange={(e) => setEditTitle(e.target.value)}
             fullWidth
             size="small"
           />
-          {editing.payload.type === "experience" ? null : (
+          {editing?.payload.type === "experience" ? null : (
             <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" }, gap: 2 }}>
               <TextField label={t("bucketList.fieldCity")} value={editCity} onChange={(e) => setEditCity(e.target.value)} fullWidth size="small" />
               <TextField label={t("bucketList.fieldCountry")} value={editCountry} onChange={(e) => setEditCountry(e.target.value)} fullWidth size="small" />
@@ -456,9 +456,9 @@ export const BucketListPage = (): JSX.Element => {
             onClick={() => void saveEdit()}
             disabled={
               Boolean(busyId) ||
-              (editing.payload.type === "experience" && !editTitle.trim()) ||
-              (editing.payload.type === "destination" && (!editCity.trim() || !editCountry.trim())) ||
-              ((editing.payload.type === "place" || editing.payload.type === "event") && !editTitle.trim())
+              (editing?.payload.type === "experience" && !editTitle.trim()) ||
+              (editing?.payload.type === "destination" && (!editCity.trim() || !editCountry.trim())) ||
+              ((editing?.payload.type === "place" || editing?.payload.type === "event") && !editTitle.trim())
             }
           >
             {t("common.save")}

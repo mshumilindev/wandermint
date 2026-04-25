@@ -1,6 +1,28 @@
 import { z } from "zod";
 import { festivalSelectionSchema } from "../events/eventLookup.schema";
 
+const foodDrinkStrategySchema = z.enum([
+  "balanced",
+  "high_end",
+  "local_authentic",
+  "not_tourist_trap",
+  "street_food",
+  "budget_local",
+  "seafood_focus",
+  "comfort_safe",
+  "experimental",
+]);
+
+const foodDrinkPlannerSettingsSchema = z.object({
+  primaryFoodDrinkStrategy: foodDrinkStrategySchema,
+  secondaryFoodDrinkStrategies: z.array(foodDrinkStrategySchema).max(8),
+  includeAlcoholRecommendations: z.boolean(),
+  includeCoffeeTeaRecommendations: z.boolean(),
+  includeSupermarketShopTips: z.boolean(),
+  includePracticalWarnings: z.boolean(),
+  avoidTouristTrapsAggressively: z.boolean(),
+});
+
 export const dateRangeSchema = z.object({
   start: z.string().min(1),
   end: z.string().min(1),
@@ -28,6 +50,8 @@ export const tripPreferencesSchema = z.object({
   avoids: z.array(z.string()),
   mustSeeNotes: z.string().default(""),
   specialWishes: z.string(),
+  foodDrinkPlanner: foodDrinkPlannerSettingsSchema.optional(),
+  storyInspirationLevel: z.enum(["off", "subtle", "balanced", "themed"]).optional(),
 });
 
 export const hotelInfoSchema = z.object({

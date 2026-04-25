@@ -2,7 +2,7 @@ import dayjs from "dayjs";
 import type { FlickSyncLibraryItem } from "../../entities/flicksync/model";
 import type { Trip } from "../../entities/trip/model";
 import type { BucketListItem, BucketListPayload } from "../../features/bucket-list/bucketList.types";
-import type { PreferenceProfile } from "../../entities/user/model";
+import type { PreferenceProfile, UserPreferences } from "../../entities/user/model";
 import { bucketListRepository } from "../../features/bucket-list/bucketListRepository";
 import { bucketListFeasibilityScore, bucketListItemCityCountry } from "../../features/bucket-list/bucketListNormalize";
 import { privacySettingsRepository } from "../../features/privacy/privacySettingsRepository";
@@ -90,6 +90,8 @@ export type HomeSuggestionContext = {
   tasteConfidence: number;
   /** When false, taste/behavior Firestore profiles were not loaded (privacy or missing). */
   personalizationAllowed: boolean;
+  /** Account preferences when loaded (null if fetch failed). */
+  accountPreferences?: UserPreferences | null;
 };
 
 const tripDurationDays = (trip: Trip): number => {
@@ -300,5 +302,6 @@ export const buildHomeSuggestionContext = async (userId: string): Promise<HomeSu
     lastTripDate,
     tasteConfidence: tasteProfile?.confidence ?? 0,
     personalizationAllowed,
+    accountPreferences: prefs,
   };
 };

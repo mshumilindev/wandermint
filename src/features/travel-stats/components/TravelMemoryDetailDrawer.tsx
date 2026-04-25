@@ -134,6 +134,7 @@ export const TravelMemoryDetailDrawer = ({
                 locationHint={memory.country}
                 categoryHint={memory.style}
                 instagramConnected={instagramConnected}
+                instagramAuthSurface="inlineToken"
                 onAttachmentsChange={persistAttachments}
                 onInstagramConnected={onInstagramConnected}
               />

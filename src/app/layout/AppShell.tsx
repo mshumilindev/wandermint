@@ -169,10 +169,16 @@ export const AppShell = (): JSX.Element => {
           position="sticky"
           elevation={0}
           sx={{
-            background: "transparent",
+            background: "none",
+            backgroundColor: "transparent",
             boxShadow: "none",
             border: "none",
             backgroundImage: "none",
+            "&.MuiPaper-root": {
+              background: "none",
+              backgroundColor: "transparent",
+              backgroundImage: "none",
+            },
           }}
         >
           <Toolbar
@@ -210,7 +216,17 @@ export const AppShell = (): JSX.Element => {
                   sx={{ width: 34, height: 34, border: "1px solid var(--wm-glass-border)" }}
                 />
                 <Tooltip title={t("common.signOut")}>
-                  <IconButton color="inherit" edge="end" onClick={() => void signOutUser()} aria-label={t("common.signOut")} size="small">
+                  <IconButton
+                    color="inherit"
+                    edge="end"
+                    onClick={() => void signOutUser()}
+                    aria-label={t("common.signOut")}
+                    size="small"
+                    sx={{
+                      border: "1px solid rgba(183, 237, 226, 0.16)",
+                      background: "transparent",
+                    }}
+                  >
                     <LogoutRoundedIcon fontSize="small" />
                   </IconButton>
                 </Tooltip>

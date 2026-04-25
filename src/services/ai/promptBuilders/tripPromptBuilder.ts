@@ -15,6 +15,13 @@ import { formatLockedMustSeeForPrompt } from "../../places/placeTypes";
 import type { DestinationDiscovery, WeatherContext } from "../../providers/contracts";
 import { buildTransportNodePlanningClause } from "../../transport/transportNodePlanning";
 import { buildTripGenerationAvoidClause } from "../../preferences/preferenceConstraintsService";
+import { mergeFoodDrinkPlannerSettings } from "../../foodCulture/foodCultureDefaults";
+import { buildFoodCultureLayer } from "../../foodCulture/foodCultureLayerBuilder";
+import { getOrBuildFoodCultureLayer } from "../../foodCulture/foodCultureCache";
+import { formatFoodCultureLayersForTripPrompt } from "../../foodCulture/foodCulturePromptForAi";
+import { formatStoryTravelPromptAppendix, refineStoryTravelExperiences } from "../../storyTravel/storyTravelAiLayer";
+import { mergeStoryTravelPreferences } from "../../storyTravel/storyTravelDefaults";
+import { storySuggestionsForTripDraft } from "../../storyTravel/storyTravelSuggestionService";
 
 const summarizeDiscovery = (discovery: DestinationDiscovery): string => {
   const summarizeItems = (label: string, items: DestinationDiscovery[keyof Pick<DestinationDiscovery, "attractions" | "museums" | "localFood" | "traditionalDrinks" | "nearbyPlaces" | "dayTrips" | "mustSee">]): string =>
@@ -86,6 +93,46 @@ export const buildTripGenerationPrompt = (
       ? "When structured intercity transport hubs are listed, honor their exact pins for same-day routing and segment hand-offs — do not substitute different hub names or merge distant terminals without travel time."
       : "";
   const avoidClause = buildTripGenerationAvoidClause(draft.userPreferences?.preferenceProfile).trim();
+  const foodPlanner = mergeFoodDrinkPlannerSettings(draft.preferences.foodDrinkPlanner);
+  const foodCultureLayers = draft.tripSegments
+    .filter((s) => s.city.trim() && s.country.trim())
+    .map((seg) =>
+      getOrBuildFoodCultureLayer({
+        city: seg.city,
+        country: seg.country,
+        planner: foodPlanner,
+        foodInterests: draft.preferences.foodInterests,
+        avoids: draft.preferences.avoids,
+        build: () => buildFoodCultureLayer({ city: seg.city, country: seg.country, planner: foodPlanner }),
+      }),
+    );
+  const foodCultureBlock = formatFoodCultureLayersForTripPrompt(foodCultureLayers, foodPlanner, draft.budget.style);
+
+  const tripDurationDays = ((): number => {
+    const a = draft.dateRange.start.trim();
+    const b = draft.dateRange.end.trim();
+    if (!a || !b) {
+      return 3;
+    }
+    const ms = new Date(b).getTime() - new Date(a).getTime();
+    const days = Math.round(ms / (24 * 60 * 60 * 1000)) + 1;
+    return Number.isFinite(days) ? Math.max(1, days) : 3;
+  })();
+  const storyPrefsMerged = mergeStoryTravelPreferences(draft.userPreferences?.storyTravel);
+  const primarySeg = draft.tripSegments[0];
+  const storyCandidates = storyPrefsMerged.enabled
+    ? refineStoryTravelExperiences(
+        storySuggestionsForTripDraft(draft, draft.userPreferences ?? null),
+        {
+          tripDurationDays,
+          pace: tempWizardPrefs.pace,
+          budgetStyle: draft.budget.style,
+          primaryCity: primarySeg?.city,
+          primaryCountry: primarySeg?.country,
+        },
+      )
+    : [];
+  const storyTravelBlock = formatStoryTravelPromptAppendix(storyCandidates);
 
   return [
     `Generate between ${plan.min} and ${plan.max} structured future trip options; target ${plan.target} meaningfully different plans (${plan.reason}).`,
@@ -143,6 +190,8 @@ export const buildTripGenerationPrompt = (
     draft.foodPreferences && draft.foodPreferences.length > 0
       ? `Food (structured — restaurants are concrete targets; intents are tags for cuisine mix, districts, and meal timing only):\n${formatFoodPreferencesForPrompt(draft.foodPreferences)}`
       : "",
+    `Food & drink planner (structured): primary=${foodPlanner.primaryFoodDrinkStrategy}; secondary=${foodPlanner.secondaryFoodDrinkStrategies.join(", ") || "none"}; alcohol=${foodPlanner.includeAlcoholRecommendations}; coffee/tea=${foodPlanner.includeCoffeeTeaRecommendations}; shop tips=${foodPlanner.includeSupermarketShopTips}; practical warnings=${foodPlanner.includePracticalWarnings}; aggressive anti-trap=${foodPlanner.avoidTouristTrapsAggressively}.`,
+    foodCultureBlock,
     `Avoids: ${draft.preferences.avoids.join(", ")}`,
     `Weather provider context: ${weatherSummary}`,
     `Destination discovery context:\n${summarizeDiscovery(discovery)}`,
@@ -159,6 +208,7 @@ export const buildTripGenerationPrompt = (
     draft.musicPlanningSignals
       ? `Optional music taste (confidence ${draft.musicPlanningSignals.confidence}): scenes ${draft.musicPlanningSignals.scenes.join(" · ")}; vibe: ${draft.musicPlanningSignals.vibe ?? "n/a"}.`
       : "",
+    storyTravelBlock ? storyTravelBlock : "",
   ]
     .filter(Boolean)
     .join("\n");

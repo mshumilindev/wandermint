@@ -406,6 +406,42 @@ export const InteractiveTravelMap = ({
           "radial-gradient(circle at 72% 16%, rgba(48, 184, 160, 0.16), transparent 24%), radial-gradient(circle at 22% 84%, rgba(196, 95, 122, 0.14), transparent 22%), linear-gradient(180deg, rgba(6, 14, 20, 0.74), rgba(6, 10, 14, 0.82))",
       }}
     >
+      <Box sx={{ display: "grid", gap: 1 }}>
+        <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", md: "repeat(5, minmax(0, 1fr))" } }}>
+          {overlayStats.map((item) => (
+            <Box
+              key={item.label}
+              sx={{
+                borderRadius: 2,
+                border: "1px solid rgba(183, 237, 226, 0.14)",
+                background: "rgba(4, 16, 24, 0.64)",
+                px: 1.5,
+                py: 1.25,
+                minHeight: 64,
+                display: "grid",
+                alignContent: "space-between",
+              }}
+            >
+              <Typography variant="caption" color="text.secondary">
+                {item.label}
+              </Typography>
+              <Typography variant="h6" color="primary.main" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+                {item.value}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+        {isResolving ? (
+          <Chip label={t("travelStats.resolvingMap")} size="small" color="primary" sx={{ width: "fit-content" }} />
+        ) : unresolvedCount > 0 ? (
+          <Chip
+            label={t("travelStats.unresolvedMapCount", { count: unresolvedCount })}
+            size="small"
+            color="warning"
+            sx={{ width: "fit-content" }}
+          />
+        ) : null}
+      </Box>
       <Box
         ref={viewportRef}
         role="img"
@@ -672,142 +708,7 @@ export const InteractiveTravelMap = ({
           );
         })}
 
-        <Box
-          sx={{
-            position: "absolute",
-            top: 16,
-            left: 16,
-            display: "flex",
-            gap: 1,
-            flexWrap: "wrap",
-            maxWidth: "calc(100% - 32px)",
-            zIndex: 3,
-          }}
-        >
-          {overlayStats.map((item) => (
-            <Chip
-              key={item.label}
-              label={`${item.label}: ${item.value}`}
-              size="small"
-              sx={{
-                color: "text.primary",
-                background: "rgba(4, 16, 24, 0.76)",
-                border: "1px solid rgba(183, 237, 226, 0.14)",
-                backdropFilter: "blur(12px)",
-              }}
-            />
-          ))}
-          {isResolving ? (
-            <Chip label={t("travelStats.resolvingMap")} size="small" color="primary" />
-          ) : unresolvedCount > 0 ? (
-            <Chip
-              label={t("travelStats.unresolvedMapCount", { count: unresolvedCount })}
-              size="small"
-              color="warning"
-            />
-          ) : null}
-        </Box>
-
         {hoveredPoint ? <HoverPlaceCard point={hoveredPoint} t={t} /> : null}
-
-        {reminiscingMemory ? (
-          <GlassPanel
-            component="button"
-            elevated
-            onClick={() => {
-              const memory = reminiscingMemory;
-              const point =
-                points.find((item) => item.memories.some((m) => m.id === memory.id)) ??
-                points.find((item) => item.city === memory.city && item.country === memory.country) ?? {
-                  id: `remin-${memory.id}`,
-                  city: memory.city,
-                  country: memory.country,
-                  label: `${memory.city}, ${memory.country}`,
-                  latitude: memory.latitude ?? 0,
-                  longitude: memory.longitude ?? 0,
-                  visitCount: 1,
-                  memories: [memory],
-                };
-              setMemoryDrawer({ point, memory });
-            }}
-            sx={{
-              position: "absolute",
-              left: 16,
-              bottom: 16,
-              width: { xs: "calc(100% - 32px)", lg: 380 },
-              maxWidth: "100%",
-              p: 1.5,
-              zIndex: 3,
-              display: "grid",
-              gap: 1.25,
-              minWidth: 0,
-              boxSizing: "border-box",
-              cursor: "pointer",
-              textAlign: "left",
-              font: "inherit",
-              color: "inherit",
-              "&:focus-visible": {
-                outline: "2px solid rgba(33, 220, 195, 0.55)",
-                outlineOffset: 2,
-              },
-            }}
-          >
-            <EntityPreviewImage
-              entityId={`travel-memory:${reminiscingMemory.id}`}
-              variant="compact"
-              title={reminiscingMemory.city}
-              locationHint={reminiscingMemory.country}
-              categoryHint="city"
-              latitude={reminiscingMemory.latitude}
-              longitude={reminiscingMemory.longitude}
-              alt={`${reminiscingMemory.city} · ${reminiscingMemory.country} · city`}
-            />
-            <Typography variant="overline" color="primary.main" sx={{ display: "block" }}>
-              {t("travelStats.reminiscing")}
-            </Typography>
-            <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, minWidth: 0 }}>
-              <Box sx={{ flexShrink: 0, mt: 0.35 }}>
-                <CountryFlag country={reminiscingMemory.country} size="1.05rem" />
-              </Box>
-              <Typography variant="h6" sx={{ minWidth: 0, flex: 1, lineHeight: 1.25, wordBreak: "break-word" }}>
-                {`${reminiscingMemory.city}, ${reminiscingMemory.country}`}
-              </Typography>
-            </Box>
-            <Box
-              sx={{
-                px: 1.25,
-                py: 1,
-                borderRadius: 2,
-                border: "1px solid rgba(245, 138, 44, 0.22)",
-                background: "rgba(245, 138, 44, 0.1)",
-                alignSelf: "stretch",
-                minWidth: 0,
-              }}
-            >
-              <Typography variant="caption" color="text.primary" sx={{ display: "block", lineHeight: 1.45, whiteSpace: "normal" }}>
-                {t("travelStats.timeToVisitAgain")}
-              </Typography>
-            </Box>
-            <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap", minWidth: 0 }}>
-              {summarizeStyles(points.flatMap((point) => point.memories).filter((memory) => memory.city === reminiscingMemory.city && memory.country === reminiscingMemory.country)).map((style) => (
-                <StyleBadge key={style} style={style} />
-              ))}
-            </Box>
-            {summarizeNotes(reminiscingMemory.notes) ? (
-              <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, minWidth: 0 }}>
-                <RouteRoundedIcon sx={{ fontSize: 18, color: "primary.main", flexShrink: 0, mt: 0.2 }} />
-                <Box sx={{ minWidth: 0, flex: 1 }}>
-                  <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600, mb: 0.35 }}>
-                    {formatTravelMemoryRange(reminiscingMemory, t)}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "normal", wordBreak: "break-word" }}>
-                    {summarizeNotes(reminiscingMemory.notes)}
-                  </Typography>
-                </Box>
-              </Box>
-            ) : null}
-          </GlassPanel>
-        ) : null}
 
         <Typography
           variant="caption"
@@ -859,6 +760,99 @@ export const InteractiveTravelMap = ({
           </GlassPanel>
         ) : null}
       </Box>
+      {reminiscingMemory ? (
+        <GlassPanel
+          component="button"
+          elevated
+          onClick={() => {
+            const memory = reminiscingMemory;
+            const point =
+              points.find((item) => item.memories.some((m) => m.id === memory.id)) ??
+              points.find((item) => item.city === memory.city && item.country === memory.country) ?? {
+                id: `remin-${memory.id}`,
+                city: memory.city,
+                country: memory.country,
+                label: `${memory.city}, ${memory.country}`,
+                latitude: memory.latitude ?? 0,
+                longitude: memory.longitude ?? 0,
+                visitCount: 1,
+                memories: [memory],
+              };
+            setMemoryDrawer({ point, memory });
+          }}
+          sx={{
+            p: 1.5,
+            mt: 1.25,
+            display: "grid",
+            gap: 1.25,
+            minWidth: 0,
+            boxSizing: "border-box",
+            cursor: "pointer",
+            textAlign: "left",
+            font: "inherit",
+            color: "inherit",
+            "&:focus-visible": {
+              outline: "2px solid rgba(33, 220, 195, 0.55)",
+              outlineOffset: 2,
+            },
+          }}
+        >
+          <EntityPreviewImage
+            entityId={`travel-memory:${reminiscingMemory.id}`}
+            variant="compact"
+            title={reminiscingMemory.city}
+            locationHint={reminiscingMemory.country}
+            categoryHint="city"
+            latitude={reminiscingMemory.latitude}
+            longitude={reminiscingMemory.longitude}
+            alt={`${reminiscingMemory.city} · ${reminiscingMemory.country} · city`}
+          />
+          <Typography variant="overline" color="primary.main" sx={{ display: "block" }}>
+            {t("travelStats.reminiscing")}
+          </Typography>
+          <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, minWidth: 0 }}>
+            <Box sx={{ flexShrink: 0, mt: 0.35 }}>
+              <CountryFlag country={reminiscingMemory.country} size="1.05rem" />
+            </Box>
+            <Typography variant="h6" sx={{ minWidth: 0, flex: 1, lineHeight: 1.25, wordBreak: "break-word" }}>
+              {`${reminiscingMemory.city}, ${reminiscingMemory.country}`}
+            </Typography>
+          </Box>
+          <Box
+            sx={{
+              px: 1.25,
+              py: 1,
+              borderRadius: 2,
+              border: "1px solid rgba(245, 138, 44, 0.22)",
+              background: "rgba(245, 138, 44, 0.1)",
+              alignSelf: "stretch",
+              minWidth: 0,
+            }}
+          >
+            <Typography variant="caption" color="text.primary" sx={{ display: "block", lineHeight: 1.45, whiteSpace: "normal" }}>
+              {t("travelStats.timeToVisitAgain")}
+            </Typography>
+          </Box>
+          <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap", minWidth: 0 }}>
+            {summarizeStyles(points.flatMap((point) => point.memories).filter((memory) => memory.city === reminiscingMemory.city && memory.country === reminiscingMemory.country)).map((style) => (
+              <StyleBadge key={style} style={style} />
+            ))}
+          </Box>
+          {summarizeNotes(reminiscingMemory.notes) ? (
+            <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, minWidth: 0 }}>
+              <RouteRoundedIcon sx={{ fontSize: 18, color: "primary.main", flexShrink: 0, mt: 0.2 }} />
+              <Box sx={{ minWidth: 0, flex: 1 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600, mb: 0.35 }}>
+                  {formatTravelMemoryRange(reminiscingMemory, t)}
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                  {summarizeNotes(reminiscingMemory.notes)}
+                </Typography>
+              </Box>
+            </Box>
+          ) : null}
+        </GlassPanel>
+      ) : null}
 
       <GlassPanel sx={{ p: 1.25, display: "grid", gap: 1, maxHeight: { xs: "min(52vh, 480px)", md: "min(58vh, 560px)" } }}>
         <Typography variant="overline" color="primary.main">

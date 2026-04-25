@@ -6,6 +6,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "../../../app/store/useAuthStore";
+import { useUserPreferencesStore } from "../../../app/store/useUserPreferencesStore";
 import { useTripDetailsStore } from "../../../app/store/useTripDetailsStore";
 import { useTripsStore } from "../../../app/store/useTripsStore";
 import { TravelerJourneyView, useTravelerJourneyData } from "../../traveler-journey";
@@ -17,6 +18,7 @@ import { GlassPanel } from "../../../shared/ui/GlassPanel";
 import { MetadataPill } from "../../../shared/ui/MetadataPill";
 import { ConfirmActionDialog } from "../../../shared/ui/ConfirmActionDialog";
 import { getCountryFlagEmoji } from "../../../shared/ui/CountryFlag";
+import { formatUserFriendlyDateRange } from "../../../shared/lib/dateDisplay";
 import { DayPlanTimeline } from "../components/DayPlanTimeline";
 import { TripCurrentDayPhaseBanner } from "../components/TripCurrentDayPhaseBanner";
 import { TripEditPanel } from "../components/TripEditPanel";
@@ -29,6 +31,12 @@ import { calculateTimelineProgress } from "../../timeline-progress/calculateTime
 import { TimelineProgressCard } from "../../timeline-progress/TimelineProgressCard";
 import { buildExecutionStateFromDay, completionIdsFromDay, pickLiveDayId } from "../execution/buildLiveExecutionModel";
 import { resolvePlanTimezone } from "../pacing/planTimeUtils";
+import { MustTryBeforeLeavingCard } from "../../food-culture/components/MustTryBeforeLeavingCard";
+import { buildFoodCultureLayer } from "../../../services/foodCulture/foodCultureLayerBuilder";
+import { getOrBuildFoodCultureLayer } from "../../../services/foodCulture/foodCultureCache";
+import { mergeFoodDrinkPlannerSettings } from "../../../services/foodCulture/foodCultureDefaults";
+import { storySuggestionsForTripEntity } from "../../../services/storyTravel/storyTravelSuggestionService";
+import { StoryExperienceStrip } from "../../storyTravel/components/StoryExperienceStrip";
 
 export const TripOverviewPage = (): JSX.Element => {
   const { t } = useTranslation();
@@ -53,6 +61,8 @@ export const TripOverviewPage = (): JSX.Element => {
   const proposals = useTripDetailsStore((state) => state.replanProposalsByTripId[tripId] ?? []);
   const meta = useTripDetailsStore((state) => state.detailsMetaByTripId[tripId]);
   const pushToast = useUiStore((state) => state.pushToast);
+  const preferences = useUserPreferencesStore((state) => state.preferences);
+  const ensurePreferences = useUserPreferencesStore((state) => state.ensurePreferences);
   const [isEditing, setIsEditing] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [confirmEditOpen, setConfirmEditOpen] = useState(false);
@@ -76,6 +86,12 @@ export const TripOverviewPage = (): JSX.Element => {
       void ensureTrips(user.id);
     }
   }, [ensureTrips, user?.id]);
+
+  useEffect(() => {
+    if (user?.id) {
+      void ensurePreferences(user.id);
+    }
+  }, [ensurePreferences, user?.id]);
 
   const allTrips = useMemo(
     () => tripIds.map((id) => tripsById[id]).filter((row): row is NonNullable<typeof row> => Boolean(row)),
@@ -104,6 +120,32 @@ export const TripOverviewPage = (): JSX.Element => {
     () => (liveDayForProgress ? resolvePlanTimezone(trip ?? null, liveDayForProgress.segmentId) : undefined),
     [liveDayForProgress, trip],
   );
+
+  const storyExperiences = useMemo(() => {
+    if (!trip) {
+      return [];
+    }
+    return storySuggestionsForTripEntity(trip, preferences);
+  }, [trip, preferences]);
+
+  const foodCultureLayer = useMemo(() => {
+    if (!trip) {
+      return null;
+    }
+    const seg = trip.tripSegments[0];
+    if (!seg?.city?.trim() || !seg?.country?.trim()) {
+      return null;
+    }
+    const planner = mergeFoodDrinkPlannerSettings(trip.preferences.foodDrinkPlanner);
+    return getOrBuildFoodCultureLayer({
+      city: seg.city,
+      country: seg.country,
+      planner,
+      foodInterests: trip.preferences.foodInterests,
+      avoids: trip.preferences.avoids,
+      build: () => buildFoodCultureLayer({ city: seg.city, country: seg.country, planner }),
+    });
+  }, [trip]);
 
   if (meta?.status === "loading" && !trip) {
     return <TripOverviewPageSkeleton />;
@@ -159,7 +201,7 @@ export const TripOverviewPage = (): JSX.Element => {
     <Box sx={{ display: "grid", gap: 3 }}>
       <SectionHeader
         title={trip.title}
-        subtitle={`${trip.destination} | ${trip.dateRange.start} - ${trip.dateRange.end}`}
+        subtitle={`${trip.destination} | ${formatUserFriendlyDateRange(trip.dateRange.start, trip.dateRange.end)}`}
         action={
           <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
             <Button variant="outlined" onClick={() => void handleMarkTripDone()}>
@@ -203,13 +245,21 @@ export const TripOverviewPage = (): JSX.Element => {
         validateLabel={t("trips.validate")}
         onRevalidate={() => void handleRevalidate()}
       />
+      <MustTryBeforeLeavingCard layer={foodCultureLayer} />
+      {storyExperiences.length > 0 ? (
+        <StoryExperienceStrip
+          title={t("trips.storyOptionalForTrip")}
+          subtitle={t("homeSuggestions.storySectionSubtitle")}
+          experiences={storyExperiences}
+        />
+      ) : null}
       <GlassPanel sx={{ p: 2.5, display: "grid", gap: 1.5 }}>
         <Typography variant="h6">{t("trips.cityRoute")}</Typography>
         <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
           {trip.tripSegments.map((segment) => (
             <MetadataPill
               key={segment.id}
-              label={`${segment.country ? `${getCountryFlagEmoji(segment.country) ?? ""} ` : ""}${segment.city}${segment.country ? `, ${segment.country}` : ""} · ${segment.startDate} - ${segment.endDate}`.trim()}
+              label={`${segment.country ? `${getCountryFlagEmoji(segment.country) ?? ""} ` : ""}${segment.city}${segment.country ? `, ${segment.country}` : ""} · ${formatUserFriendlyDateRange(segment.startDate, segment.endDate)}`.trim()}
               tone="teal"
             />
           ))}

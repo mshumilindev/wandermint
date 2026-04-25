@@ -3,6 +3,7 @@ import type { FlickSyncLibraryItem } from "../../entities/flicksync/model";
 import type { MusicPlanningSignals } from "../../integrations/music/musicTypes";
 import type { UserPreferences } from "../../entities/user/model";
 import { mergePreferenceProfile } from "../preferences/preferenceConstraintsService";
+import { mergeFoodDrinkPlannerSettings } from "../foodCulture/foodCultureDefaults";
 import type { TripDraft } from "../planning/tripGenerationService";
 import { buildFlightPlanningClause } from "../flights/flightPlanningHints";
 import { MAX_FOOD_PREFERENCES } from "../food/foodPreferenceTypes";
@@ -120,6 +121,7 @@ export const compactTripDraftForAi = (draft: TripDraft): Record<string, unknown>
     foodInterests: draft.preferences.foodInterests.slice(0, 10),
     mustSeeNotes: draft.preferences.mustSeeNotes.slice(0, 400),
     specialWishes: draft.preferences.specialWishes.slice(0, 400),
+    foodDrinkPlanner: mergeFoodDrinkPlannerSettings(draft.preferences.foodDrinkPlanner),
   },
   mustSeePlaces: (draft.mustSeePlaces ?? []).slice(0, MAX_MUST_SEE_PLACES).map((p) => ({
     mode: p.mode,

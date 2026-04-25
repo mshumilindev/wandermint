@@ -24,6 +24,8 @@ import { analyticsRepository } from "../../analytics/analyticsRepository";
 import { useInstagramConnectionStatus } from "../../../hooks/useInstagramConnectionStatus";
 import type { AvoidConstraint, PreferenceProfile, RightNowExploreSpeed } from "../../../entities/user/model";
 import { defaultPreferenceProfile, mergePreferenceProfile } from "../../../services/preferences/preferenceConstraintsService";
+import { defaultStoryTravelPreferences, mergeStoryTravelPreferences } from "../../../services/storyTravel/storyTravelDefaults";
+import type { StoryTravelDensity, StoryTravelPreferences } from "../../../services/storyTravel/storyTravelTypes";
 import { nowIso } from "../../../services/firebase/timestampMapper";
 import { GlassPanel } from "../../../shared/ui/GlassPanel";
 import { LocationAutocompleteField } from "../../../shared/ui/LocationAutocompleteField";
@@ -39,6 +41,7 @@ type SettingsDraft = {
   trackAchievements: boolean;
   allowPersonalAnalytics: boolean;
   preferenceProfile: PreferenceProfile;
+  storyTravel: StoryTravelPreferences;
 };
 
 export const SettingsPage = (): JSX.Element => {
@@ -56,6 +59,7 @@ export const SettingsPage = (): JSX.Element => {
     trackAchievements: true,
     allowPersonalAnalytics: false,
     preferenceProfile: defaultPreferenceProfile(),
+    storyTravel: defaultStoryTravelPreferences(),
   });
   const [saveBusy, setSaveBusy] = useState(false);
   const [avoidKind, setAvoidKind] = useState<AvoidConstraint["type"]>("country");
@@ -81,6 +85,7 @@ export const SettingsPage = (): JSX.Element => {
         trackAchievements: preferences.trackAchievements ?? true,
         allowPersonalAnalytics: preferences.allowPersonalAnalytics ?? false,
         preferenceProfile: mergePreferenceProfile(preferences.preferenceProfile),
+        storyTravel: mergeStoryTravelPreferences(preferences.storyTravel),
       });
     }
   }, [preferences]);
@@ -106,6 +111,7 @@ export const SettingsPage = (): JSX.Element => {
         trackAchievements: draft.trackAchievements,
         allowPersonalAnalytics: draft.allowPersonalAnalytics,
         preferenceProfile: mergePreferenceProfile(draft.preferenceProfile),
+        storyTravel: mergeStoryTravelPreferences(draft.storyTravel),
         updatedAt: nowIso(),
       });
       if (wasAnalyticsOn && !nextAnalyticsOn && user?.id) {
@@ -168,6 +174,17 @@ export const SettingsPage = (): JSX.Element => {
         prefer: current.preferenceProfile.prefer.filter((_, i) => i !== index),
       },
     }));
+  };
+
+  const patchStoryTravel = (partial: Partial<StoryTravelPreferences>): void => {
+    setDraft((current) => ({
+      ...current,
+      storyTravel: { ...current.storyTravel, ...partial },
+    }));
+  };
+
+  const onStoryDensityChange = (event: SelectChangeEvent<StoryTravelDensity>): void => {
+    patchStoryTravel({ density: event.target.value as StoryTravelDensity });
   };
 
   return (
@@ -238,6 +255,68 @@ export const SettingsPage = (): JSX.Element => {
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 2, maxWidth: 720 }}>
               {t("settings.exploreSpeedHint")}
             </Typography>
+            <Box sx={{ mt: 2.5, pt: 2, borderTop: "1px solid", borderColor: "divider", maxWidth: 720 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                {t("settings.storyTravelTitle")}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+                {t("settings.storyTravelSubtitle")}
+              </Typography>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={draft.storyTravel.enabled}
+                    onChange={(e) => patchStoryTravel({ enabled: e.target.checked })}
+                    disabled={saveBusy}
+                  />
+                }
+                label={<Typography variant="body2">{t("settings.storyTravelEnabled")}</Typography>}
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={draft.storyTravel.showLiterary}
+                    onChange={(e) => patchStoryTravel({ showLiterary: e.target.checked })}
+                    disabled={saveBusy || !draft.storyTravel.enabled}
+                  />
+                }
+                label={<Typography variant="body2">{t("settings.storyTravelLiterary")}</Typography>}
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={draft.storyTravel.showFilmSeries}
+                    onChange={(e) => patchStoryTravel({ showFilmSeries: e.target.checked })}
+                    disabled={saveBusy || !draft.storyTravel.enabled}
+                  />
+                }
+                label={<Typography variant="body2">{t("settings.storyTravelFilm")}</Typography>}
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={draft.storyTravel.showVibeMatches}
+                    onChange={(e) => patchStoryTravel({ showVibeMatches: e.target.checked })}
+                    disabled={saveBusy || !draft.storyTravel.enabled}
+                  />
+                }
+                label={<Typography variant="body2">{t("settings.storyTravelVibe")}</Typography>}
+              />
+              <FormControl size="small" sx={{ minWidth: 220, mt: 1.5 }} disabled={saveBusy || !draft.storyTravel.enabled}>
+                <InputLabel id="wm-story-density">{t("settings.storyTravelDensity")}</InputLabel>
+                <Select<StoryTravelDensity>
+                  labelId="wm-story-density"
+                  label={t("settings.storyTravelDensity")}
+                  value={draft.storyTravel.density}
+                  onChange={onStoryDensityChange}
+                >
+                  <MenuItem value="none">{t("settings.storyTravelDensityNone")}</MenuItem>
+                  <MenuItem value="subtle">{t("settings.storyTravelDensitySubtle")}</MenuItem>
+                  <MenuItem value="balanced">{t("settings.storyTravelDensityBalanced")}</MenuItem>
+                  <MenuItem value="themed">{t("settings.storyTravelDensityThemed")}</MenuItem>
+                </Select>
+              </FormControl>
+            </Box>
             <Box sx={{ mt: 2.5, pt: 2, borderTop: "1px solid", borderColor: "divider", maxWidth: 720 }}>
               <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
                 {t("settings.travelBlocksTitle")}

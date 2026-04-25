@@ -15,4 +15,5 @@ export const localScenarioSchema = z.object({
   alternatives: z.array(z.string()),
   createdAt: z.string(),
   savedAt: z.string().optional(),
+  foodCultureTeaser: z.string().max(200).optional(),
 });

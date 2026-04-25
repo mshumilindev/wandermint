@@ -1,4 +1,5 @@
 import type { FestivalSelection } from "../events/eventLookup.model";
+import type { FoodDrinkPlannerSettings } from "../food-culture/model";
 
 export type TripCompletionStatus =
   | "draft"
@@ -63,6 +64,13 @@ export interface TripPreferences {
   avoids: string[];
   mustSeeNotes: string;
   specialWishes: string;
+  /** Food & drink planning stance — drives prompts, ranking, and curated culture layer. */
+  foodDrinkPlanner?: FoodDrinkPlannerSettings;
+  /**
+   * Per-trip intensity for optional story-inspired suggestions.
+   * Omitted = follow account defaults only (see {@link UserPreferences.storyTravel}).
+   */
+  storyInspirationLevel?: "off" | "subtle" | "balanced" | "themed";
 }
 
 export interface TravelExecutionProfile {

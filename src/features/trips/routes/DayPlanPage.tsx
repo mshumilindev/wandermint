@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ActivityBlock, ActivityCompletionStatus } from "../../../entities/activity/model";
 import { useAuthStore } from "../../../app/store/useAuthStore";
+import { useUserPreferencesStore } from "../../../app/store/useUserPreferencesStore";
 import { useTripDetailsStore } from "../../../app/store/useTripDetailsStore";
 import { useTripsStore } from "../../../app/store/useTripsStore";
 import { useUiStore } from "../../../app/store/useUiStore";
@@ -26,6 +27,8 @@ import { stableActivityKey } from "../visited/activityKey";
 import { emptyTripPlanOverlay } from "../visited/planOverlayModel";
 import { assessActivityBlockSafety } from "../../safety/safetyRules";
 import type { VisitMarkSource } from "../visited/planOverlayModel";
+import { storySuggestionsForTripEntity } from "../../../services/storyTravel/storyTravelSuggestionService";
+import { StoryExperienceStrip } from "../../storyTravel/components/StoryExperienceStrip";
 
 const findBlockByActivityKey = (
   tripId: string,
@@ -60,6 +63,8 @@ export const DayPlanPage = (): JSX.Element => {
   const dayIds = useTripDetailsStore((state) => state.tripDayIdsByTripId[tripId] ?? []);
   const proposals = useTripDetailsStore((state) => state.replanProposalsByTripId[tripId] ?? []);
   const trip = useTripsStore((state) => state.tripsById[tripId]);
+  const preferences = useUserPreferencesStore((state) => state.preferences);
+  const ensurePreferences = useUserPreferencesStore((state) => state.ensurePreferences);
   const overlaySlice = usePlanOverlayStore((state) => (tripId ? state.overlays[tripId] : undefined));
   const setActivityPatch = usePlanOverlayStore((state) => state.setActivityPatch);
   const dismissFingerprint = usePlanOverlayStore((state) => state.dismissFingerprint);
@@ -78,6 +83,12 @@ export const DayPlanPage = (): JSX.Element => {
       void ensureTripDetails(user.id, tripId);
     }
   }, [ensureTripDetails, tripId, user]);
+
+  useEffect(() => {
+    if (user?.id) {
+      void ensurePreferences(user.id);
+    }
+  }, [ensurePreferences, user?.id]);
 
   useEffect(() => {
     const id = window.setInterval(() => setPlanClock(new Date()), 60_000);
@@ -113,6 +124,13 @@ export const DayPlanPage = (): JSX.Element => {
     const i = dayIds.indexOf(day.id);
     return i >= 0 ? i : 0;
   }, [day, dayIds]);
+
+  const storyForFirstDay = useMemo(() => {
+    if (!trip || dayIndex !== 0) {
+      return [];
+    }
+    return storySuggestionsForTripEntity(trip, preferences);
+  }, [trip, preferences, dayIndex]);
 
   const timeZone = useMemo(
     () => (day ? resolvePlanTimezone(trip, day.segmentId) : "UTC"),
@@ -371,6 +389,13 @@ export const DayPlanPage = (): JSX.Element => {
             </Box>
           }
         />
+        {dayIndex === 0 && trip && storyForFirstDay.length > 0 ? (
+          <StoryExperienceStrip
+            title={t("trips.storyOptionalFirstDay")}
+            subtitle={t("trips.storyOptionalForTrip")}
+            experiences={storyForFirstDay}
+          />
+        ) : null}
         {day.adjustment ? <Chip label={t(`editDay.adjustments.${day.adjustment.state}`)} sx={{ width: "fit-content" }} /> : null}
         {suggestion ? (
           <PlanSuggestionBar

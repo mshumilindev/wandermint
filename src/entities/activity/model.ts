@@ -113,4 +113,6 @@ export interface ActivityBlock {
   normalizedTripPlanItem?: NormalizedTripPlanItemFields;
   /** User explicitly acknowledged conservative safety hints for this step. */
   safetyWarningAcknowledged?: boolean;
+  /** Compact food/drink insider notes (from model + curated grounding). */
+  foodCultureNotes?: string[];
 }

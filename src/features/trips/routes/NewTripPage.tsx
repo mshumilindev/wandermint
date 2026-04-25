@@ -11,8 +11,11 @@ import { useUiStore } from "../../../app/store/useUiStore";
 import { useUserPreferencesStore } from "../../../app/store/useUserPreferencesStore";
 import { useTravelMemoryStore } from "../../../app/store/useTravelMemoryStore";
 import { usePlaceMemoryStore } from "../../../app/store/usePlaceMemoryStore";
+import type { Trip } from "../../../entities/trip/model";
 import type { MusicEventSuggestion } from "../../../services/events/musicEventTypes";
 import type { TripDraft, TripGenerationProgressStep, TripGenerationServiceResult } from "../../../services/planning/tripGenerationService";
+import { storySuggestionsForTripEntity } from "../../../services/storyTravel/storyTravelSuggestionService";
+import type { StoryTravelExperience } from "../../../services/storyTravel/storyTravelTypes";
 import { tripGenerationService } from "../../../services/planning/tripGenerationService";
 import { resolveTripOptionCountFromDraft } from "../../../services/planning/tripOptionCountService";
 import { shiftTripLikeDateRange } from "../../../services/planning/timing/travelTimingService";
@@ -32,13 +35,17 @@ import type { GeneratedTripOptions } from "../../../services/ai/schemas";
 import { buildPlanExplanationUi } from "../../explainability/planExplanation.types";
 import { readAndConsumeBucketListTripPrefill } from "../../bucket-list/bucketListTripPrefill";
 import { validateAnchorEventDraft, validateTripDraft, type AnchorEventDraft } from "../validation/tripWizardValidation";
+import { mergeFoodDrinkPlannerSettings } from "../../../services/foodCulture/foodCultureDefaults";
 import { TripWizardRouteSection } from "../components/wizard/TripWizardRouteSection";
 import { TripWizardTravelStyleSection } from "../components/wizard/TripWizardTravelStyleSection";
 import { TripWizardPartyPaceSection } from "../components/wizard/TripWizardPartyPaceSection";
 import { TripWizardBudgetSection } from "../components/wizard/TripWizardBudgetSection";
 import { TripWizardReviewSection } from "../components/wizard/TripWizardReviewSection";
+import { TripWizardFoodCultureSection } from "../components/wizard/TripWizardFoodCultureSection";
+import { TripWizardStoryInspirationSection } from "../components/wizard/TripWizardStoryInspirationSection";
 import { MusicInspiredSuggestionCard } from "../components/MusicInspiredSuggestionCard";
 import { TravelTimingWarningBanner } from "../components/TravelTimingWarningBanner";
+import { StoryExperienceStrip } from "../../storyTravel/components/StoryExperienceStrip";
 import { FestivalDatesDialog } from "../events/FestivalDatesDialog";
 import { useEventLookup } from "../events/useEventLookup";
 import { applyEventLookupToAnchorEventDraft, isMultiDayEventResult } from "../../../services/events/applyEventLookup";
@@ -105,6 +112,7 @@ export const NewTripPage = (): JSX.Element => {
   const [segmentToRemove, setSegmentToRemove] = useState<string | null>(null);
   const [anchorEventToRemove, setAnchorEventToRemove] = useState<string | null>(null);
   const [isOptionsTransitionPending, startOptionsTransition] = useTransition();
+  const [dismissedStoryKeys, setDismissedStoryKeys] = useState<Set<string>>(() => new Set());
   const [draft, setDraft] = useState<TripDraft>({
     userId: user?.id ?? "",
     planningMode: "city_first",
@@ -123,6 +131,8 @@ export const NewTripPage = (): JSX.Element => {
       avoids: [],
       mustSeeNotes: "",
       specialWishes: "",
+      foodDrinkPlanner: mergeFoodDrinkPlannerSettings(undefined),
+      storyInspirationLevel: "subtle",
     },
     executionProfile: {
       explorationSpeed: "standard",
@@ -277,6 +287,25 @@ export const NewTripPage = (): JSX.Element => {
 
     return ((activeIndex + 1) / tripProgressStages.length) * 100;
   }, [generationStep, tripProgressStages]);
+
+  const storyByOptionId = useMemo(() => {
+    const m = new Map<string, StoryTravelExperience[]>();
+    if (!options.length) {
+      return m;
+    }
+    for (const opt of options) {
+      const mergedTrip: Trip = {
+        ...opt.trip,
+        preferences: {
+          ...opt.trip.preferences,
+          ...draft.preferences,
+          foodDrinkPlanner: mergeFoodDrinkPlannerSettings(draft.preferences.foodDrinkPlanner),
+        },
+      };
+      m.set(opt.optionId, storySuggestionsForTripEntity(mergedTrip, preferences));
+    }
+    return m;
+  }, [options, draft.preferences, preferences]);
 
   const updateSegment = (segmentId: string, patch: Partial<TripDraft["tripSegments"][number]>): void => {
     setDraft((current) => {
@@ -478,6 +507,7 @@ export const NewTripPage = (): JSX.Element => {
       );
       startOptionsTransition(() => {
         setOptions(result.options);
+        setDismissedStoryKeys(new Set());
         setTravelBehaviorHintKeys(result.travelBehaviorUiHintKeys ?? []);
         setMusicEventSuggestions(result.musicEventSuggestions ?? []);
       });
@@ -495,7 +525,17 @@ export const NewTripPage = (): JSX.Element => {
 
   const chooseOption = async (option: GeneratedTripOptions["options"][number]): Promise<void> => {
     try {
-      await saveGeneratedTrip(option.trip, option.days);
+      await saveGeneratedTrip(
+        {
+          ...option.trip,
+          preferences: {
+            ...option.trip.preferences,
+            ...draft.preferences,
+            foodDrinkPlanner: mergeFoodDrinkPlannerSettings(draft.preferences.foodDrinkPlanner),
+          },
+        },
+        option.days,
+      );
       await navigate({ to: "/trips/$tripId", params: { tripId: option.trip.id } });
     } catch (error) {
       debugLogError("wizard_save_generated_trip", error);
@@ -542,6 +582,8 @@ export const NewTripPage = (): JSX.Element => {
         <TripWizardTravelStyleSection draft={draft} patchDraft={patchDraft} toggleVibe={toggleVibe} />
         <TripWizardPartyPaceSection draft={draft} patchDraft={patchDraft} />
         <TripWizardBudgetSection draft={draft} tripValidation={tripValidation} patchDraft={patchDraft} />
+        <TripWizardFoodCultureSection draft={draft} patchDraft={patchDraft} />
+        <TripWizardStoryInspirationSection draft={draft} patchDraft={patchDraft} />
         <TripWizardReviewSection
           draft={draft}
           tripValidation={tripValidation}
@@ -591,7 +633,10 @@ export const NewTripPage = (): JSX.Element => {
       ) : null}
       {options.length > 0 ? (
         <Grid container spacing={2}>
-          {options.map((option) => (
+          {options.map((option) => {
+            const rawStories = storyByOptionId.get(option.optionId) ?? [];
+            const stories = rawStories.filter((s) => !dismissedStoryKeys.has(`${option.optionId}::${s.id}`));
+            return (
             <Grid item xs={12} md={4} key={option.optionId}>
               <GlassPanel sx={{ p: 2.5, display: "grid", gap: 2, height: "100%" }}>
                 <EntityPreviewImage
@@ -626,6 +671,20 @@ export const NewTripPage = (): JSX.Element => {
                     </Typography>
                   ) : null;
                 })}
+                {stories.length > 0 ? (
+                  <StoryExperienceStrip
+                    title={t("wizard.storyTripOptionTitle")}
+                    subtitle={t("wizard.storyTripOptionSubtitle")}
+                    experiences={stories}
+                    dismissScopeId={option.optionId}
+                    onDismissExperience={(expId, scope) => {
+                      if (!scope) {
+                        return;
+                      }
+                      setDismissedStoryKeys((prev) => new Set(prev).add(`${scope}::${expId}`));
+                    }}
+                  />
+                ) : null}
                 {option.planExplanation ? (
                   <Accordion disableGutters elevation={0} sx={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: 2, "&:before": { display: "none" } }}>
                     <AccordionSummary expandIcon={<ExpandMoreIcon />}>
@@ -744,7 +803,8 @@ export const NewTripPage = (): JSX.Element => {
                 </Button>
               </GlassPanel>
             </Grid>
-          ))}
+            );
+          })}
         </Grid>
       ) : null}
       <FestivalDatesDialog

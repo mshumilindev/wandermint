@@ -72,7 +72,7 @@ export const publicWeatherProvider: WeatherProvider = {
 
     const response = await fetch(url);
     if (!response.ok) {
-      throw new Error("Forecast provider failed");
+      throw new Error(`Forecast provider failed (${response.status})`);
     }
 
     const result = forecastSchema.parse(await response.json());

@@ -2,6 +2,8 @@ import { buildHomeSuggestionContext } from "./homeTripSuggestionContextBuilder";
 import { refineTripSuggestions } from "./homeTripSuggestionAiLayer";
 import { buildCuratedFallbackSuggestions, scoreHomeTripSuggestions } from "./homeTripSuggestionScoring";
 import type { HomeTripSuggestionCandidate, SuggestedTrip } from "./homeTripSuggestionTypes";
+import type { StoryTravelExperience } from "../storyTravel/storyTravelTypes";
+import { storySuggestionsForHomeContext } from "../storyTravel/storyTravelSuggestionService";
 
 const stripScore = (rows: HomeTripSuggestionCandidate[]): SuggestedTrip[] =>
   rows.map(({ score: _s, ...rest }) => rest);
@@ -19,6 +21,7 @@ const isSignalThin = (ctx: Awaited<ReturnType<typeof buildHomeSuggestionContext>
 export type HomeTripSuggestionResult = {
   suggestions: SuggestedTrip[];
   usedFallback: boolean;
+  storyInspirations: StoryTravelExperience[];
 };
 
 /**
@@ -27,10 +30,11 @@ export type HomeTripSuggestionResult = {
 export const getHomeTripSuggestions = async (userId: string): Promise<HomeTripSuggestionResult> => {
   const uid = userId.trim();
   if (!uid) {
-    return { suggestions: stripScore(buildCuratedFallbackSuggestions()), usedFallback: true };
+    return { suggestions: stripScore(buildCuratedFallbackSuggestions()), usedFallback: true, storyInspirations: [] };
   }
 
   const ctx = await buildHomeSuggestionContext(uid);
+  const storyInspirations = storySuggestionsForHomeContext(ctx, ctx.accountPreferences ?? null);
   const deterministic = scoreHomeTripSuggestions(ctx, 8);
   const refined =
     deterministic.length > 0 ? await refineTripSuggestions(deterministic, ctx) : ([] as HomeTripSuggestionCandidate[]);
@@ -39,7 +43,7 @@ export const getHomeTripSuggestions = async (userId: string): Promise<HomeTripSu
   let usedFallback = false;
 
   if (suggestions.length === 0) {
-    return { suggestions: stripScore(buildCuratedFallbackSuggestions(ctx.budget.currency)), usedFallback: true };
+    return { suggestions: stripScore(buildCuratedFallbackSuggestions(ctx.budget.currency)), usedFallback: true, storyInspirations };
   }
 
   if (isSignalThin(ctx) && suggestions.length < 3) {
@@ -58,5 +62,5 @@ export const getHomeTripSuggestions = async (userId: string): Promise<HomeTripSu
     }
   }
 
-  return { suggestions: suggestions.slice(0, 5), usedFallback };
+  return { suggestions: suggestions.slice(0, 5), usedFallback, storyInspirations };
 };

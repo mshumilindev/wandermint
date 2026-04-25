@@ -1,4 +1,4 @@
-import { Box, FormControlLabel, Stack, Switch, Typography } from "@mui/material";
+import { Alert, Box, Button, FormControlLabel, Stack, Switch, Typography } from "@mui/material";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { beginSpotifyPkceLogin } from "../../../integrations/music/spotify/spotifyAuth";
@@ -103,6 +103,26 @@ export const ConnectedServicesSection = ({ userId }: ConnectedServicesSectionPro
           {t("music.settings.sectionSubtitle")}
         </Typography>
       </Box>
+      <Alert
+        severity={spotify?.status === "connected" ? "success" : "info"}
+        action={
+          <Button
+            size="small"
+            variant={spotify?.status === "connected" ? "outlined" : "contained"}
+            disabled={busy}
+            onClick={() => void handleConnectSpotify()}
+          >
+            {spotify?.status === "connected" ? t("music.settings.reconnectCta") : t("music.settings.connectCta")}
+          </Button>
+        }
+      >
+        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+          {t("music.settings.authTitle")}
+        </Typography>
+        <Typography variant="body2">
+          {spotify?.status === "connected" ? t("music.settings.authConnected") : t("music.settings.authDisconnected")}
+        </Typography>
+      </Alert>
       <Stack spacing={1}>
         <FormControlLabel
           control={

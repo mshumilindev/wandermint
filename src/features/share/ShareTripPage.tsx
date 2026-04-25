@@ -13,6 +13,7 @@ import { GlassPanel } from "../../shared/ui/GlassPanel";
 import { SectionHeader } from "../../shared/ui/SectionHeader";
 import { MetadataPill } from "../../shared/ui/MetadataPill";
 import { getCountryFlagEmoji } from "../../shared/ui/CountryFlag";
+import { formatUserFriendlyDateRange } from "../../shared/lib/dateDisplay";
 import { DayPlanTimeline } from "../trips/components/DayPlanTimeline";
 import { TripCurrentDayPhaseBanner } from "../trips/components/TripCurrentDayPhaseBanner";
 import { IntercityMovesPanel } from "../trips/components/IntercityMovesPanel";
@@ -421,7 +422,7 @@ export const ShareTripPage = (): JSX.Element => {
           <Box sx={{ display: "grid", gap: 3 }}>
             <SectionHeader
               title={viewTrip.title}
-              subtitle={`${viewTrip.destination} | ${viewTrip.dateRange.start} – ${viewTrip.dateRange.end}`}
+              subtitle={`${viewTrip.destination} | ${formatUserFriendlyDateRange(viewTrip.dateRange.start, viewTrip.dateRange.end)}`}
               action={
                 <Stack
                   direction="row"
@@ -461,7 +462,7 @@ export const ShareTripPage = (): JSX.Element => {
                 {viewTrip.tripSegments.map((segment) => (
                   <MetadataPill
                     key={segment.id}
-                    label={`${segment.country ? `${getCountryFlagEmoji(segment.country) ?? ""} ` : ""}${segment.city}${segment.country ? `, ${segment.country}` : ""} · ${segment.startDate} – ${segment.endDate}`.trim()}
+                    label={`${segment.country ? `${getCountryFlagEmoji(segment.country) ?? ""} ` : ""}${segment.city}${segment.country ? `, ${segment.country}` : ""} · ${formatUserFriendlyDateRange(segment.startDate, segment.endDate)}`.trim()}
                     tone="teal"
                   />
                 ))}

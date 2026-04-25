@@ -15,6 +15,7 @@ import { useUserPreferencesStore } from "../../../app/store/useUserPreferencesSt
 import { formatCostRangeLabel } from "../../../shared/lib/priceDisplay";
 import { sanitizeOptionalUserFacingDescription, sanitizeUserFacingLine } from "../../../shared/lib/userFacingText";
 import { getStepPresentation } from "../lib/stepPresentation";
+import { FoodCultureBadge } from "../../food-culture/components/FoodCultureBadge";
 import type { ActivityOverlayEntry, InsertedPlanStub } from "../visited/planOverlayModel";
 import { isEffectivelySkipped, isEffectivelyVisited } from "../visited/planVisitOverlayHelpers";
 
@@ -170,6 +171,13 @@ export const ActivityBlockCard = ({
           <Typography variant="body2" color="text.secondary">
             {cleanDescription}
           </Typography>
+        ) : null}
+        {block.type === "meal" && block.foodCultureNotes && block.foodCultureNotes.length > 0 ? (
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+            {block.foodCultureNotes.map((note) => (
+              <FoodCultureBadge key={note} variant="local_tip" label={note} />
+            ))}
+          </Box>
         ) : null}
         {showSafety ? (
           <Alert

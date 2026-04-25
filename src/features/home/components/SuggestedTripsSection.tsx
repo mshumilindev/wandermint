@@ -6,10 +6,14 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getHomeTripSuggestions } from "../../../services/home/homeTripSuggestionService";
 import type { SuggestedTrip } from "../../../services/home/homeTripSuggestionTypes";
+import type { StoryTravelExperience } from "../../../services/storyTravel/storyTravelTypes";
 import { SectionHeader } from "../../../shared/ui/SectionHeader";
+import { StoryExperienceStrip } from "../../storyTravel/components/StoryExperienceStrip";
 import { SuggestedTripCard } from "./SuggestedTripCard";
 
-type LoadState = { status: "idle" | "loading" } | { status: "ready"; trips: SuggestedTrip[]; usedFallback: boolean };
+type LoadState =
+  | { status: "idle" | "loading" }
+  | { status: "ready"; trips: SuggestedTrip[]; usedFallback: boolean; storyInspirations: StoryTravelExperience[] };
 
 export const SuggestedTripsSection = ({ userId }: { userId: string | undefined }): JSX.Element => {
   const { t } = useTranslation();
@@ -17,16 +21,27 @@ export const SuggestedTripsSection = ({ userId }: { userId: string | undefined }
 
   const load = useCallback(async () => {
     if (!userId?.trim()) {
-      setState({ status: "ready", trips: (await getHomeTripSuggestions("")).suggestions, usedFallback: true });
+      const empty = await getHomeTripSuggestions("");
+      setState({ status: "ready", trips: empty.suggestions, usedFallback: true, storyInspirations: empty.storyInspirations });
       return;
     }
     setState({ status: "loading" });
     try {
       const result = await getHomeTripSuggestions(userId);
-      setState({ status: "ready", trips: result.suggestions, usedFallback: result.usedFallback });
+      setState({
+        status: "ready",
+        trips: result.suggestions,
+        usedFallback: result.usedFallback,
+        storyInspirations: result.storyInspirations,
+      });
     } catch {
       const fallback = await getHomeTripSuggestions("");
-      setState({ status: "ready", trips: fallback.suggestions, usedFallback: true });
+      setState({
+        status: "ready",
+        trips: fallback.suggestions,
+        usedFallback: true,
+        storyInspirations: fallback.storyInspirations,
+      });
     }
   }, [userId]);
 
@@ -64,6 +79,11 @@ export const SuggestedTripsSection = ({ userId }: { userId: string | undefined }
           </Grid>
         ))}
       </Grid>
+      <StoryExperienceStrip
+        title={t("homeSuggestions.storySectionTitle")}
+        subtitle={t("homeSuggestions.storySectionSubtitle")}
+        experiences={ready.storyInspirations}
+      />
     </Box>
   );
 };

@@ -69,6 +69,11 @@ export const ScenarioCard = ({ scenario, saveLabel, doneLabel, skippedLabel, onS
               {cleanRouteLogic}
             </Typography>
           ) : null}
+          {scenario.foodCultureTeaser ? (
+            <Typography variant="caption" color="primary.light" sx={{ display: "block", maxWidth: 560 }}>
+              {t("foodCulture.teaserPill")}: {sanitizeUserFacingLine(scenario.foodCultureTeaser)}
+            </Typography>
+          ) : null}
         </Box>
         {onSave ? (
           <Button variant="contained" onClick={onSave}>

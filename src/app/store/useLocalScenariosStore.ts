@@ -6,6 +6,7 @@ import type { UserPreferences } from "../../entities/user/model";
 import { savedLocalScenariosRepository } from "../../services/firebase/repositories/savedLocalScenariosRepository";
 import { nowIso } from "../../services/firebase/timestampMapper";
 import type { RightNowSpendTier } from "../../services/ai/promptBuilders/localScenarioPromptBuilder";
+import type { FoodDrinkPlannerSettings } from "../../entities/food-culture/model";
 import { localScenarioService } from "../../services/planning/localScenarioService";
 import { debugLogError, getErrorDevDetails, getErrorMessage } from "../../shared/lib/errors";
 import { cacheDurations, createIdleCacheMeta, isCacheFresh, type CacheMeta } from "../../shared/types/cache";
@@ -39,6 +40,7 @@ interface LocalScenariosState {
     userPreferences?: UserPreferences | null;
     travelMemories?: TravelMemory[];
     placeMemories?: PlaceExperienceMemory[];
+    foodDrinkPlanner?: FoodDrinkPlannerSettings | null;
   }) => Promise<void>;
   saveScenario: (userId: string, scenarioId: string) => Promise<void>;
   patchScenario: (scenarioId: string, scenario: LocalScenario) => void;

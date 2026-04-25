@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { BetterDateWindow, TravelTimingDateRange, TravelTimingInsight } from "../../../services/planning/timing/travelTimingTypes";
 import { analyzeTravelTiming, suggestBetterDates } from "../../../services/planning/timing/travelTimingService";
+import { formatUserFriendlyDateRange } from "../../../shared/lib/dateDisplay";
 
 export type TravelTimingWarningBannerProps = {
   country: string;
@@ -155,7 +156,10 @@ export const TravelTimingWarningBanner = ({
                     onClick={() => applyWindow(w)}
                     sx={{ borderRadius: 2, border: "1px solid rgba(255,255,255,0.12)" }}
                   >
-                    <ListItemText primary={w.label} secondary={`${w.start} → ${w.end}\n${w.rationale}`} />
+                    <ListItemText
+                      primary={w.label}
+                      secondary={`${formatUserFriendlyDateRange(w.start, w.end)}\n${w.rationale}`}
+                    />
                   </ListItemButton>
                 </ListItem>
               ))}

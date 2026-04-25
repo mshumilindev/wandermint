@@ -10,6 +10,8 @@ interface MemoryRoutePreviewProps {
 const toNumber = (value: number | undefined): number | null =>
   value === undefined || Number.isNaN(value) ? null : value;
 
+const toCoordinateBucket = (lat: number, lon: number): string => `${lat.toFixed(4)}:${lon.toFixed(4)}`;
+
 export const MemoryRoutePreview = ({ memories }: MemoryRoutePreviewProps): JSX.Element | null => {
   const { t } = useTranslation();
   const gradientId = useId().replace(/:/g, "");
@@ -20,9 +22,19 @@ export const MemoryRoutePreview = ({ memories }: MemoryRoutePreviewProps): JSX.E
       lon: toNumber(memory.longitude),
     }))
     .filter((item): item is { memory: TravelMemory; lat: number; lon: number } => item.lat !== null && item.lon !== null)
-    .sort((left, right) => left.memory.startDate.localeCompare(right.memory.startDate));
+    .sort(
+      (left, right) =>
+        left.memory.startDate.localeCompare(right.memory.startDate) ||
+        left.memory.endDate.localeCompare(right.memory.endDate) ||
+        left.memory.id.localeCompare(right.memory.id),
+    );
 
   if (withCoords.length < 2) {
+    return null;
+  }
+
+  const distinctCoordinateCount = new Set(withCoords.map((item) => toCoordinateBucket(item.lat, item.lon))).size;
+  if (distinctCoordinateCount < 2) {
     return null;
   }
 
