@@ -1,9 +1,13 @@
 import { create } from "zustand";
 import type { LocalScenario } from "../../entities/local-scenario/model";
+import type { PlaceExperienceMemory } from "../../entities/place-memory/model";
+import type { TravelMemory } from "../../entities/travel-memory/model";
+import type { UserPreferences } from "../../entities/user/model";
 import { savedLocalScenariosRepository } from "../../services/firebase/repositories/savedLocalScenariosRepository";
 import { nowIso } from "../../services/firebase/timestampMapper";
+import type { RightNowSpendTier } from "../../services/ai/promptBuilders/localScenarioPromptBuilder";
 import { localScenarioService } from "../../services/planning/localScenarioService";
-import { getErrorMessage } from "../../shared/lib/errors";
+import { debugLogError, getErrorDevDetails, getErrorMessage } from "../../shared/lib/errors";
 import { cacheDurations, createIdleCacheMeta, isCacheFresh, type CacheMeta } from "../../shared/types/cache";
 
 type LocalScenarioProgressStep =
@@ -12,7 +16,8 @@ type LocalScenarioProgressStep =
   | "finding_nearby_places"
   | "estimating_movement"
   | "composing_scenarios"
-  | "refining_with_ai";
+  | "refining_with_ai"
+  | "polishing_itinerary";
 
 interface LocalScenariosState {
   scenarioIds: string[];
@@ -23,8 +28,20 @@ interface LocalScenariosState {
   progressStep: LocalScenarioProgressStep | null;
   expectedScenarioCount: number;
   ensureSavedScenarios: (userId: string) => Promise<void>;
-  generateScenarios: (request: { userId?: string; locationLabel: string; latitude?: number; longitude?: number; vibe: string; availableMinutes: number }) => Promise<void>;
+  generateScenarios: (request: {
+    userId?: string;
+    locationLabel: string;
+    latitude?: number;
+    longitude?: number;
+    vibe: string;
+    availableMinutes: number;
+    rightNowSpendTier?: RightNowSpendTier;
+    userPreferences?: UserPreferences | null;
+    travelMemories?: TravelMemory[];
+    placeMemories?: PlaceExperienceMemory[];
+  }) => Promise<void>;
   saveScenario: (userId: string, scenarioId: string) => Promise<void>;
+  patchScenario: (scenarioId: string, scenario: LocalScenario) => void;
 }
 
 export const useLocalScenariosStore = create<LocalScenariosState>((set) => ({
@@ -54,6 +71,7 @@ export const useLocalScenariosStore = create<LocalScenariosState>((set) => ({
         savedMeta: { status: "success", lastFetchedAt: Date.now(), lastValidatedAt: null, isDirty: false, error: null },
       }));
     } catch (error) {
+      debugLogError("local_scenarios_ensure_saved", error);
       set((state) => ({ savedMeta: { ...state.savedMeta, status: "error", error: getErrorMessage(error) } }));
     }
   },
@@ -101,11 +119,22 @@ export const useLocalScenariosStore = create<LocalScenariosState>((set) => ({
         flowMeta: { status: "success", lastFetchedAt: Date.now(), lastValidatedAt: null, isDirty: false, error: null },
       });
     } catch (error) {
+      debugLogError("local_scenarios_generate", error);
+      const message = getErrorMessage(error);
+      const dev = getErrorDevDetails(error);
+      const combined = import.meta.env.DEV && dev ? `${message}\n\n${dev}` : message;
       set((state) => ({
         progressStep: null,
-        flowMeta: { ...state.flowMeta, status: "error", error: getErrorMessage(error) },
+        flowMeta: { ...state.flowMeta, status: "error", error: combined },
       }));
     }
+  },
+
+  patchScenario: (scenarioId, scenario) => {
+    set((state) => ({
+      scenariosById: { ...state.scenariosById, [scenarioId]: scenario },
+      scenarioIds: state.scenarioIds.includes(scenarioId) ? state.scenarioIds : [scenarioId, ...state.scenarioIds],
+    }));
   },
 
   saveScenario: async (userId, scenarioId) => {

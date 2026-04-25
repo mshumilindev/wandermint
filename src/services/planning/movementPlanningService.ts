@@ -1,19 +1,50 @@
-import type { ActivityBlock, MovementLeg } from "../../entities/activity/model";
+import type { ActivityBlock, MovementLeg, PlaceSnapshot } from "../../entities/activity/model";
+import { DEFAULT_INTER_BLOCK_TRAVEL_MINUTES, resolveTransportTime } from "../../features/transport/transportTimeResolver";
 import { publicRoutingProvider } from "../providers/publicRoutingProvider";
 
-const fallbackLeg = (from: ActivityBlock, to: ActivityBlock): MovementLeg => ({
+const pointFromPlace = (place: PlaceSnapshot): { lat: number; lng: number } => ({
+  lat: place.latitude as number,
+  lng: place.longitude as number,
+});
+
+const legFromWalkingResult = (
+  from: ActivityBlock,
+  to: ActivityBlock,
+  durationMinutes: number,
+  sourceName: string,
+  confidence: "high" | "medium" | "low",
+): MovementLeg => ({
   id: `move-${from.id}-${to.id}`,
   fromBlockId: from.id,
   toBlockId: to.id,
   summary: "A short move between nearby stops",
   primary: {
     mode: "walking",
-    durationMinutes: 10,
-    certainty: "partial",
-    sourceName: "Fallback estimate",
+    durationMinutes,
+    certainty: confidence === "high" ? "live" : "partial",
+    sourceName,
+    estimateConfidence: confidence,
   },
   alternatives: [],
 });
+
+const fallbackLeg = async (from: ActivityBlock, to: ActivityBlock): Promise<MovementLeg> => {
+  if (from.place && to.place && from.place.latitude !== undefined && from.place.longitude !== undefined && to.place.latitude !== undefined && to.place.longitude !== undefined) {
+    const r = await resolveTransportTime({
+      from: pointFromPlace(from.place),
+      to: pointFromPlace(to.place),
+      mode: "walking",
+    });
+    return legFromWalkingResult(
+      from,
+      to,
+      r.durationMinutes,
+      r.source === "estimated" ? "Route estimate" : "Routed move",
+      r.confidence,
+    );
+  }
+  return legFromWalkingResult(from, to, DEFAULT_INTER_BLOCK_TRAVEL_MINUTES, "Default segment gap", "low");
+};
 
 export const movementPlanningService = {
   buildMovementLegs: async (blocks: ActivityBlock[]): Promise<MovementLeg[]> => {

@@ -2,14 +2,16 @@ import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
 import PlaceOutlinedIcon from "@mui/icons-material/PlaceOutlined";
 import RouteRoundedIcon from "@mui/icons-material/RouteRounded";
 import { Accordion, AccordionDetails, AccordionSummary, Box, Chip, Tooltip, Typography } from "@mui/material";
-import dayjs from "dayjs";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useUiStore } from "../../../app/store/useUiStore";
 import type { TravelMemory, TravelStats } from "../../../entities/travel-memory/model";
 import { EntityPreviewImage } from "../../../shared/ui/EntityPreviewImage";
 import { CountryFlag } from "../../../shared/ui/CountryFlag";
 import { GlassPanel } from "../../../shared/ui/GlassPanel";
+import { formatTravelMemoryRange } from "../../../shared/lib/formatTravelMemoryRange";
 import { StyleBadge } from "../../../shared/ui/StyleBadge";
+import { TravelMemoryDetailDrawer } from "./TravelMemoryDetailDrawer";
 import { projectToWorld, type TravelMapPoint } from "../services/travelMapService";
 
 interface InteractiveTravelMapProps {
@@ -17,6 +19,9 @@ interface InteractiveTravelMapProps {
   stats: TravelStats;
   isResolving: boolean;
   unresolvedCount: number;
+  onPersistTravelMemory?: (memory: TravelMemory) => Promise<void>;
+  instagramConnected?: boolean;
+  onInstagramConnected?: () => void;
 }
 
 interface TileDescriptor {
@@ -46,29 +51,6 @@ interface ProjectedMarkerPosition {
 const worldZoom = 2;
 const tileSize = 256;
 const worldSize = tileSize * 2 ** worldZoom;
-
-const formatMemoryWindow = (memory: TravelMemory): string => {
-  const start = dayjs(memory.startDate);
-  const end = dayjs(memory.endDate);
-
-  if (!start.isValid() || !end.isValid()) {
-    return memory.datePrecision === "month" ? memory.startDate.slice(0, 7) : memory.startDate;
-  }
-
-  if (memory.datePrecision === "month") {
-    if (start.isSame(end, "month")) {
-      return start.format("MMMM YYYY");
-    }
-
-    return `${start.format("MMM YYYY")} - ${end.format("MMM YYYY")}`;
-  }
-
-  if (start.isSame(end, "day")) {
-    return start.format("D MMM YYYY");
-  }
-
-  return `${start.format("D MMM")} - ${end.format("D MMM YYYY")}`;
-};
 
 const summarizeStyles = (memories: TravelMemory[]): string[] => {
   const counts = memories.reduce<Record<string, number>>(
@@ -181,13 +163,14 @@ const buildRegionGroups = (points: TravelMapPoint[]): RegionGroup[] => {
 const getMarkerPosition = (
   point: TravelMapPoint,
   mapScale: number,
+  mapVerticalScale: number,
   mapOffsetX: number,
   mapOffsetY: number,
 ): ProjectedMarkerPosition => {
   const projected = projectToWorld(point.latitude, point.longitude, worldZoom);
   return {
     x: mapOffsetX + projected.x * mapScale,
-    y: mapOffsetY + projected.y * mapScale,
+    y: mapOffsetY + projected.y * mapScale * mapVerticalScale,
   };
 };
 
@@ -204,6 +187,7 @@ const getLatestVisitDate = (point: TravelMapPoint): string =>
 const createRoutePath = (
   points: TravelMapPoint[],
   mapScale: number,
+  mapVerticalScale: number,
   mapOffsetX: number,
   mapOffsetY: number,
 ): string | null => {
@@ -213,20 +197,21 @@ const createRoutePath = (
 
   const ordered = [...points].sort((left, right) => getEarliestVisitDate(left).localeCompare(getEarliestVisitDate(right)));
   const commands = ordered.map((point, index) => {
-    const position = getMarkerPosition(point, mapScale, mapOffsetX, mapOffsetY);
+    const position = getMarkerPosition(point, mapScale, mapVerticalScale, mapOffsetX, mapOffsetY);
     return `${index === 0 ? "M" : "L"} ${position.x.toFixed(2)} ${position.y.toFixed(2)}`;
   });
 
   return commands.join(" ");
 };
 
-const createReminiscingMemory = (points: TravelMapPoint[]): TravelMemory | null => {
+const createReminiscingMemory = (points: TravelMapPoint[], seed: number): TravelMemory | null => {
   const allMemories = points.flatMap((point) => point.memories);
   if (allMemories.length === 0) {
     return null;
   }
-
-  return [...allMemories].sort((left, right) => left.startDate.localeCompare(right.startDate))[0] ?? null;
+  const sorted = [...allMemories].sort((left, right) => left.startDate.localeCompare(right.startDate));
+  const index = Math.floor(seed * sorted.length) % sorted.length;
+  return sorted[index] ?? null;
 };
 
 const HoverPlaceCard = ({
@@ -274,7 +259,7 @@ const HoverPlaceCard = ({
           }}
         >
           <Typography variant="body2" sx={{ fontWeight: 700 }}>
-            {formatMemoryWindow(memory)}
+            {formatTravelMemoryRange(memory, t)}
           </Typography>
           {summarizeNotes(memory.notes) ? (
             <Typography variant="caption" color="text.secondary">
@@ -292,15 +277,21 @@ export const InteractiveTravelMap = ({
   stats,
   isResolving,
   unresolvedCount,
+  onPersistTravelMemory,
+  instagramConnected = false,
+  onInstagramConnected,
 }: InteractiveTravelMapProps): JSX.Element => {
   const { t } = useTranslation();
+  const pushToast = useUiStore((state) => state.pushToast);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const [viewport, setViewport] = useState({ width: 1200, height: 675 });
+  const [viewport, setViewport] = useState({ width: 1200, height: (1200 * 10) / 16 });
   const [selectedPointId, setSelectedPointId] = useState<string | null>(points[0]?.id ?? null);
   const [hoveredPointId, setHoveredPointId] = useState<string | null>(null);
   const [expandedRegions, setExpandedRegions] = useState<string[]>([]);
   const [expandedCountries, setExpandedCountries] = useState<string[]>([]);
   const [focusedPointId, setFocusedPointId] = useState<string | null>(null);
+  const [reminiscingSeed] = useState(() => Math.random());
+  const [memoryDrawer, setMemoryDrawer] = useState<{ point: TravelMapPoint; memory: TravelMemory } | null>(null);
   const tiles = useMemo(createWorldTiles, []);
   const regionGroups = useMemo(() => buildRegionGroups(points), [points]);
   const selectedPoint = useMemo(
@@ -321,7 +312,20 @@ export const InteractiveTravelMap = ({
     ],
     [stats, t],
   );
-  const reminiscingMemory = useMemo(() => createReminiscingMemory(points), [points]);
+  const reminiscingMemory = useMemo(() => createReminiscingMemory(points, reminiscingSeed), [points, reminiscingSeed]);
+
+  const drawerMemory = useMemo(() => {
+    if (!memoryDrawer) {
+      return null;
+    }
+    for (const point of points) {
+      const found = point.memories.find((item) => item.id === memoryDrawer.memory.id);
+      if (found) {
+        return found;
+      }
+    }
+    return memoryDrawer.memory;
+  }, [memoryDrawer, points]);
 
   useEffect(() => {
     const element = viewportRef.current;
@@ -329,16 +333,22 @@ export const InteractiveTravelMap = ({
       return undefined;
     }
 
+    let lastWidth = -1;
+    let lastHeight = -1;
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) {
         return;
       }
 
-      setViewport({
-        width: Math.max(entry.contentRect.width, 320),
-        height: Math.max(entry.contentRect.height, 320),
-      });
+      const width = Math.max(entry.contentRect.width, 320);
+      const height = Math.max(entry.contentRect.height, 160);
+      if (Math.abs(width - lastWidth) < 0.5 && Math.abs(height - lastHeight) < 0.5) {
+        return;
+      }
+      lastWidth = width;
+      lastHeight = height;
+      setViewport({ width, height });
     });
 
     observer.observe(element);
@@ -363,24 +373,29 @@ export const InteractiveTravelMap = ({
     return () => window.clearTimeout(timeoutId);
   }, [focusedPointId]);
 
-  const mapScale = Math.min(viewport.width / worldSize, viewport.height / worldSize);
+  const mapVerticalScale = 0.58;
+  const mapScale = viewport.width / worldSize;
   const renderedWorldWidth = worldSize * mapScale;
-  const renderedWorldHeight = worldSize * mapScale;
+  const renderedWorldHeight = worldSize * mapScale * mapVerticalScale;
   const mapOffsetX = (viewport.width - renderedWorldWidth) / 2;
   const mapOffsetY = (viewport.height - renderedWorldHeight) / 2;
   const routePath = useMemo(
-    () => createRoutePath(points, mapScale, mapOffsetX, mapOffsetY),
-    [mapOffsetX, mapOffsetY, mapScale, points],
+    () => createRoutePath(points, mapScale, mapVerticalScale, mapOffsetX, mapOffsetY),
+    [mapOffsetX, mapOffsetY, mapScale, mapVerticalScale, points],
   );
   const selectedMarkerPosition = selectedPoint
-    ? getMarkerPosition(selectedPoint, mapScale, mapOffsetX, mapOffsetY)
+    ? getMarkerPosition(selectedPoint, mapScale, mapVerticalScale, mapOffsetX, mapOffsetY)
     : null;
   const selectedMemories = selectedPoint
     ? [...selectedPoint.memories].sort((left, right) => right.startDate.localeCompare(left.startDate))
     : [];
   const topVisitCount = points[0]?.visitCount ?? 1;
 
+  const idleMarker = "#e5647a";
+  const idleMarkerSoft = "rgba(229, 100, 122, 0.32)";
+
   return (
+    <>
     <GlassPanel
       elevated
       sx={{
@@ -398,9 +413,9 @@ export const InteractiveTravelMap = ({
         sx={{
           position: "relative",
           width: "100%",
-          height: "clamp(420px, 52vw, 760px)",
-          minHeight: 420,
-          maxHeight: "760px",
+          minHeight: { xs: 300, sm: 340 },
+          aspectRatio: "16 / 10",
+          maxHeight: { xs: 520, sm: 780 },
           borderRadius: 3,
           overflow: "hidden",
           border: "1px solid rgba(183, 237, 226, 0.18)",
@@ -444,9 +459,9 @@ export const InteractiveTravelMap = ({
                 sx={{
                   position: "absolute",
                   width: tileSize * mapScale,
-                  height: tileSize * mapScale,
+                  height: tileSize * mapScale * mapVerticalScale,
                   left: tile.left * mapScale,
-                  top: tile.top * mapScale,
+                  top: tile.top * mapScale * mapVerticalScale,
                   filter:
                     "invert(1) hue-rotate(145deg) saturate(0.9) brightness(0.72) contrast(1.12)",
                   opacity: 0.82,
@@ -504,6 +519,7 @@ export const InteractiveTravelMap = ({
           <Box
             component="svg"
             viewBox={`0 0 ${viewport.width} ${viewport.height}`}
+            preserveAspectRatio="none"
             aria-hidden
             sx={{
               position: "absolute",
@@ -536,13 +552,13 @@ export const InteractiveTravelMap = ({
         ) : null}
 
         {points.map((point) => {
-          const position = getMarkerPosition(point, mapScale, mapOffsetX, mapOffsetY);
+          const position = getMarkerPosition(point, mapScale, mapVerticalScale, mapOffsetX, mapOffsetY);
           const markerSize = getMarkerSize(point.visitCount);
           const isSelected = selectedPointId === point.id;
           const isHovered = hoveredPointId === point.id;
           const isFocused = focusedPointId === point.id;
           const transformScale = isSelected ? 1.12 : isHovered || isFocused ? 1.08 : 1;
-          const markerColor = isSelected ? "#F58A2C" : "#7D1836";
+          const markerColor = isSelected ? "#F58A2C" : idleMarker;
 
           return (
             <Tooltip
@@ -596,8 +612,8 @@ export const InteractiveTravelMap = ({
                     position: "absolute",
                     inset: "-7px",
                     borderRadius: "50%",
-                    border: `1px solid ${isSelected ? "rgba(245, 138, 44, 0.45)" : "rgba(125, 24, 54, 0.3)"}`,
-                    background: `radial-gradient(circle, ${isSelected ? "rgba(245, 138, 44, 0.18)" : "rgba(125, 24, 54, 0.14)"} 0%, transparent 70%)`,
+                    border: `1px solid ${isSelected ? "rgba(245, 138, 44, 0.45)" : idleMarkerSoft}`,
+                    background: `radial-gradient(circle, ${isSelected ? "rgba(245, 138, 44, 0.18)" : "rgba(229, 100, 122, 0.16)"} 0%, transparent 70%)`,
                     animation: isSelected || isHovered ? "wmTravelMapPulse 2.2s ease-out infinite" : "none",
                     "@keyframes wmTravelMapPulse": {
                       "0%": { opacity: 0.9, transform: "scale(0.92)" },
@@ -622,11 +638,11 @@ export const InteractiveTravelMap = ({
                     position: "absolute",
                     inset: 0,
                     borderRadius: "50%",
-                    border: `1px solid ${isSelected ? "rgba(255, 238, 214, 0.84)" : "rgba(255, 214, 214, 0.65)"}`,
+                    border: `1px solid ${isSelected ? "rgba(255, 238, 214, 0.84)" : "rgba(255, 200, 210, 0.72)"}`,
                     background: markerColor,
                     boxShadow: isHovered || isFocused || isSelected
-                      ? `0 0 0 4px ${isSelected ? "rgba(245, 138, 44, 0.12)" : "rgba(125, 24, 54, 0.12)"}, 0 0 18px ${isSelected ? "rgba(245, 138, 44, 0.34)" : "rgba(125, 24, 54, 0.34)"}`
-                      : `0 0 12px ${isSelected ? "rgba(245, 138, 44, 0.26)" : "rgba(125, 24, 54, 0.2)"}`,
+                      ? `0 0 0 4px ${isSelected ? "rgba(245, 138, 44, 0.12)" : "rgba(229, 100, 122, 0.14)"}, 0 0 18px ${isSelected ? "rgba(245, 138, 44, 0.34)" : "rgba(229, 100, 122, 0.32)"}`
+                      : `0 0 12px ${isSelected ? "rgba(245, 138, 44, 0.26)" : "rgba(229, 100, 122, 0.22)"}`,
                   }}
                 />
                 {point.visitCount > 1 ? (
@@ -644,7 +660,7 @@ export const InteractiveTravelMap = ({
                       fontSize: 10,
                       fontWeight: 700,
                       color: "rgba(255, 247, 240, 0.92)",
-                      background: isSelected ? "#D96A19" : "#5B1027",
+                      background: isSelected ? "#D96A19" : "#a63d55",
                       border: "1px solid rgba(255,255,255,0.18)",
                     }}
                   >
@@ -696,59 +712,99 @@ export const InteractiveTravelMap = ({
 
         {reminiscingMemory ? (
           <GlassPanel
+            component="button"
             elevated
+            onClick={() => {
+              const memory = reminiscingMemory;
+              const point =
+                points.find((item) => item.memories.some((m) => m.id === memory.id)) ??
+                points.find((item) => item.city === memory.city && item.country === memory.country) ?? {
+                  id: `remin-${memory.id}`,
+                  city: memory.city,
+                  country: memory.country,
+                  label: `${memory.city}, ${memory.country}`,
+                  latitude: memory.latitude ?? 0,
+                  longitude: memory.longitude ?? 0,
+                  visitCount: 1,
+                  memories: [memory],
+                };
+              setMemoryDrawer({ point, memory });
+            }}
             sx={{
               position: "absolute",
               left: 16,
               bottom: 16,
-              width: { xs: "calc(100% - 32px)", lg: 360 },
+              width: { xs: "calc(100% - 32px)", lg: 380 },
+              maxWidth: "100%",
               p: 1.5,
               zIndex: 3,
               display: "grid",
               gap: 1.25,
+              minWidth: 0,
+              boxSizing: "border-box",
+              cursor: "pointer",
+              textAlign: "left",
+              font: "inherit",
+              color: "inherit",
+              "&:focus-visible": {
+                outline: "2px solid rgba(33, 220, 195, 0.55)",
+                outlineOffset: 2,
+              },
             }}
           >
             <EntityPreviewImage
+              entityId={`travel-memory:${reminiscingMemory.id}`}
+              variant="compact"
               title={reminiscingMemory.city}
               locationHint={reminiscingMemory.country}
               categoryHint="city"
-              alt={`${reminiscingMemory.city}, ${reminiscingMemory.country}`}
-              compact
-              height={110}
+              latitude={reminiscingMemory.latitude}
+              longitude={reminiscingMemory.longitude}
+              alt={`${reminiscingMemory.city} · ${reminiscingMemory.country} · city`}
             />
-            <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, alignItems: "start" }}>
-              <Box sx={{ display: "grid", gap: 0.35 }}>
-                <Typography variant="overline" color="primary.main">
-                  {t("travelStats.reminiscing")}
-                </Typography>
-                <Box sx={{ display: "flex", alignItems: "center", gap: 0.8 }}>
-                  <CountryFlag country={reminiscingMemory.country} size="1.05rem" />
-                  <Typography variant="h6" sx={{ minWidth: 0, overflowWrap: "anywhere" }}>{`${reminiscingMemory.city}, ${reminiscingMemory.country}`}</Typography>
-                </Box>
+            <Typography variant="overline" color="primary.main" sx={{ display: "block" }}>
+              {t("travelStats.reminiscing")}
+            </Typography>
+            <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, minWidth: 0 }}>
+              <Box sx={{ flexShrink: 0, mt: 0.35 }}>
+                <CountryFlag country={reminiscingMemory.country} size="1.05rem" />
               </Box>
-              <Chip
-                size="small"
-                label={t("travelStats.timeToVisitAgain")}
-                sx={{ background: "rgba(245, 138, 44, 0.14)", color: "text.primary" }}
-              />
+              <Typography variant="h6" sx={{ minWidth: 0, flex: 1, lineHeight: 1.25, wordBreak: "break-word" }}>
+                {`${reminiscingMemory.city}, ${reminiscingMemory.country}`}
+              </Typography>
             </Box>
-            <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap" }}>
+            <Box
+              sx={{
+                px: 1.25,
+                py: 1,
+                borderRadius: 2,
+                border: "1px solid rgba(245, 138, 44, 0.22)",
+                background: "rgba(245, 138, 44, 0.1)",
+                alignSelf: "stretch",
+                minWidth: 0,
+              }}
+            >
+              <Typography variant="caption" color="text.primary" sx={{ display: "block", lineHeight: 1.45, whiteSpace: "normal" }}>
+                {t("travelStats.timeToVisitAgain")}
+              </Typography>
+            </Box>
+            <Box sx={{ display: "flex", gap: 0.75, flexWrap: "wrap", minWidth: 0 }}>
               {summarizeStyles(points.flatMap((point) => point.memories).filter((memory) => memory.city === reminiscingMemory.city && memory.country === reminiscingMemory.country)).map((style) => (
                 <StyleBadge key={style} style={style} />
               ))}
             </Box>
             {summarizeNotes(reminiscingMemory.notes) ? (
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <RouteRoundedIcon sx={{ fontSize: 18, color: "primary.main" }} />
-                <Typography variant="body2" color="text.secondary">
-                  {formatMemoryWindow(reminiscingMemory)}
-                </Typography>
+              <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, minWidth: 0 }}>
+                <RouteRoundedIcon sx={{ fontSize: 18, color: "primary.main", flexShrink: 0, mt: 0.2 }} />
+                <Box sx={{ minWidth: 0, flex: 1 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600, mb: 0.35 }}>
+                    {formatTravelMemoryRange(reminiscingMemory, t)}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "normal", wordBreak: "break-word" }}>
+                    {summarizeNotes(reminiscingMemory.notes)}
+                  </Typography>
+                </Box>
               </Box>
-            ) : null}
-            {summarizeNotes(reminiscingMemory.notes) ? (
-              <Typography variant="body2" color="text.secondary">
-                {summarizeNotes(reminiscingMemory.notes)}
-              </Typography>
             ) : null}
           </GlassPanel>
         ) : null}
@@ -766,41 +822,45 @@ export const InteractiveTravelMap = ({
         >
           © OpenStreetMap contributors
         </Typography>
+        {selectedPoint ? (
+          <GlassPanel
+            sx={{
+              position: "absolute",
+              right: 16,
+              bottom: 36,
+              width: { xs: 220, md: 280 },
+              p: 1.1,
+              zIndex: 3,
+              display: "grid",
+              gap: 0.7,
+              border: "1px solid rgba(245, 138, 44, 0.26)",
+              background: "rgba(245, 138, 44, 0.07)",
+            }}
+          >
+            <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, alignItems: "center" }}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, minWidth: 0 }}>
+                <CountryFlag country={selectedPoint.country} size="1rem" />
+                <Typography variant="subtitle2" noWrap>{selectedPoint.label}</Typography>
+              </Box>
+              <Chip
+                size="small"
+                label={selectedPoint.visitCount}
+                sx={{
+                  fontWeight: 700,
+                  background: topVisitCount > 1 && selectedPoint.visitCount / topVisitCount >= 0.8
+                    ? "rgba(245, 138, 44, 0.24)"
+                    : "rgba(183, 237, 226, 0.16)",
+                }}
+              />
+            </Box>
+            <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+              {summarizeStyles(selectedMemories).map((style) => <StyleBadge key={style} style={style} />)}
+            </Box>
+          </GlassPanel>
+        ) : null}
       </Box>
 
-      {selectedPoint ? (
-        <GlassPanel
-          sx={{
-            p: 1.25,
-            display: "grid",
-            gap: 0.8,
-            border: "1px solid rgba(245, 138, 44, 0.26)",
-            background: "rgba(245, 138, 44, 0.07)",
-          }}
-        >
-          <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, alignItems: "center" }}>
-            <Box sx={{ display: "flex", alignItems: "center", gap: 0.8 }}>
-              <CountryFlag country={selectedPoint.country} size="1rem" />
-              <Typography variant="subtitle2">{selectedPoint.label}</Typography>
-            </Box>
-            <Chip
-              size="small"
-              label={selectedPoint.visitCount}
-              sx={{
-                fontWeight: 700,
-                background: topVisitCount > 1 && selectedPoint.visitCount / topVisitCount >= 0.8
-                  ? "rgba(245, 138, 44, 0.24)"
-                  : "rgba(183, 237, 226, 0.16)",
-              }}
-            />
-          </Box>
-          <Box sx={{ display: "flex", gap: 0.6, flexWrap: "wrap" }}>
-            {summarizeStyles(selectedMemories).map((style) => <StyleBadge key={style} style={style} />)}
-          </Box>
-        </GlassPanel>
-      ) : null}
-
-      <GlassPanel sx={{ p: 1.25, display: "grid", gap: 1, maxHeight: 520 }}>
+      <GlassPanel sx={{ p: 1.25, display: "grid", gap: 1, maxHeight: { xs: "min(52vh, 480px)", md: "min(58vh, 560px)" } }}>
         <Typography variant="overline" color="primary.main">
           {t("travelStats.mapAtlas")}
         </Typography>
@@ -812,11 +872,10 @@ export const InteractiveTravelMap = ({
                 key={region.region}
                 expanded={regionExpanded}
                 onChange={(_event, expanded) => {
-                  setExpandedRegions((current) =>
-                    expanded
-                      ? [...new Set([...current, region.region])]
-                      : current.filter((item) => item !== region.region),
-                  );
+                  setExpandedRegions(expanded ? [region.region] : []);
+                  if (expanded) {
+                    setExpandedCountries([]);
+                  }
                 }}
                 disableGutters
                 elevation={0}
@@ -842,11 +901,7 @@ export const InteractiveTravelMap = ({
                         key={countryKey}
                         expanded={countryExpanded}
                         onChange={(_event, expanded) => {
-                          setExpandedCountries((current) =>
-                            expanded
-                              ? [...new Set([...current, countryKey])]
-                              : current.filter((item) => item !== countryKey),
-                          );
+                          setExpandedCountries(expanded ? [countryKey] : []);
                         }}
                         disableGutters
                         elevation={0}
@@ -893,7 +948,7 @@ export const InteractiveTravelMap = ({
                               >
                                 <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1, alignItems: "baseline" }}>
                                   <Box sx={{ display: "flex", alignItems: "center", gap: 0.8 }}>
-                                    <PlaceOutlinedIcon sx={{ fontSize: 16, color: isSelected ? "#F58A2C" : "#7D1836" }} />
+                                    <PlaceOutlinedIcon sx={{ fontSize: 16, color: isSelected ? "#F58A2C" : "rgba(255, 160, 178, 0.95)" }} />
                                     <Typography variant="subtitle2">{point.city}</Typography>
                                   </Box>
                                   <Typography variant="caption" color="primary.main">
@@ -909,6 +964,7 @@ export const InteractiveTravelMap = ({
                                       onClick={() => {
                                         setSelectedPointId(point.id);
                                         setFocusedPointId(point.id);
+                                        setMemoryDrawer({ point, memory });
                                       }}
                                       onMouseEnter={() => setHoveredPointId(point.id)}
                                       onMouseLeave={() =>
@@ -928,13 +984,13 @@ export const InteractiveTravelMap = ({
                                         cursor: "pointer",
                                         transition: "background 160ms ease, border-color 160ms ease",
                                         "&:hover": {
-                                          background: "rgba(125, 24, 54, 0.12)",
-                                          borderColor: "rgba(125, 24, 54, 0.26)",
+                                          background: "rgba(33, 220, 195, 0.1)",
+                                          borderColor: "rgba(33, 220, 195, 0.28)",
                                         },
                                       }}
                                     >
                                       <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                                        {formatMemoryWindow(memory)}
+                                        {formatTravelMemoryRange(memory, t)}
                                       </Typography>
                                       {summarizeNotes(memory.notes) ? (
                                         <Typography variant="caption" color="text.secondary">
@@ -958,5 +1014,26 @@ export const InteractiveTravelMap = ({
         </Box>
       </GlassPanel>
     </GlassPanel>
+
+    <TravelMemoryDetailDrawer
+      open={Boolean(memoryDrawer)}
+      onClose={() => setMemoryDrawer(null)}
+      memory={drawerMemory}
+      point={memoryDrawer?.point ?? null}
+      onMemoryUpdate={
+        onPersistTravelMemory
+          ? async (next) => {
+              try {
+                await onPersistTravelMemory(next);
+              } catch {
+                pushToast({ tone: "error", message: t("feedback.memorySaveFailed") });
+              }
+            }
+          : undefined
+      }
+      instagramConnected={instagramConnected}
+      onInstagramConnected={onInstagramConnected}
+    />
+    </>
   );
 };

@@ -3,11 +3,17 @@ import type { ActivityBlock, MovementLeg } from "../../entities/activity/model";
 import type { DayPlan } from "../../entities/day-plan/model";
 import type { PlanWarning } from "../../entities/warning/model";
 import type { Trip, TripSegment } from "../../entities/trip/model";
+import type { TravelBehaviorGenerationPlan } from "../../features/user-behavior/travelBehaviorTripGeneration";
 import type { GeneratedTripOptions } from "../ai/schemas";
 import type { WeatherContext } from "../providers/contracts";
 import { createClientId } from "../../shared/lib/id";
 import { nowIso } from "../firebase/timestampMapper";
+import { normalizeItineraryCategory } from "./itineraryCompositionService";
+import { resolvePlanTimezone } from "../../features/trips/pacing/planTimeUtils";
+import { ANALYTICS_EVENTS } from "../../features/observability/analyticsEvents";
+import { logAnalyticsEvent } from "../../features/observability/appLogger";
 import { openingHoursService } from "./openingHoursService";
+import type { TripPlace } from "../places/placeTypes";
 import type { TripDraft } from "./tripGenerationService";
 
 interface FeasibilityResult {
@@ -50,7 +56,15 @@ const createWarning = (
   createdAt: nowIso(),
 });
 
-const maxBlocksForProfile = (draft: TripDraft): number => {
+const isMajorSightBlock = (block: ActivityBlock): boolean => {
+  const cat = normalizeItineraryCategory(block);
+  if (cat === "museum" || cat === "gallery" || cat === "landmark" || cat === "event") {
+    return true;
+  }
+  return cat === "other" && block.type === "activity";
+};
+
+const maxBlocksForProfile = (draft: TripDraft, plan?: TravelBehaviorGenerationPlan | null): number => {
   const paceCap = draft.preferences.pace === "slow" ? 3 : draft.preferences.pace === "balanced" ? 4 : 5;
   const densityBoost =
     draft.executionProfile.scheduleDensity === "relaxed" ? 0
@@ -58,17 +72,31 @@ const maxBlocksForProfile = (draft: TripDraft): number => {
         : draft.executionProfile.scheduleDensity === "dense" ? 1
           : 2;
 
-  return paceCap + densityBoost;
+  let cap = paceCap + densityBoost;
+  if (plan?.fastPreferred) {
+    cap += 1;
+  }
+  if (plan?.forceRealisticPacing && !plan.userOverridePacked) {
+    cap = Math.min(cap, 5);
+  }
+  if (plan?.slowPreferred) {
+    cap = Math.min(cap, 5);
+  }
+  return cap;
 };
 
-const activeMinutesThreshold = (draft: TripDraft): number => {
+const activeMinutesThreshold = (draft: TripDraft, plan?: TravelBehaviorGenerationPlan | null): number => {
   const base = draft.executionProfile.scheduleDensity === "relaxed" ? 360
     : draft.executionProfile.scheduleDensity === "balanced" ? 450
       : draft.executionProfile.scheduleDensity === "dense" ? 540
         : 660;
 
   const paceAdjustment = draft.preferences.pace === "slow" ? -60 : draft.preferences.pace === "dense" ? 45 : 0;
-  return Math.max(300, base + paceAdjustment);
+  let threshold = Math.max(300, base + paceAdjustment);
+  if (plan?.fastPreferred) {
+    threshold = Math.round(threshold * 1.08);
+  }
+  return threshold;
 };
 
 const matchingForecast = (forecast: WeatherContext[], date: string): WeatherContext | undefined => forecast.find((item) => item.observedAt.slice(0, 10) === date);
@@ -107,14 +135,73 @@ const dayBlockDuration = (block: ActivityBlock): number => {
 
 const movementDuration = (leg: MovementLeg | undefined): number => leg?.primary.durationMinutes ?? 0;
 
+const buildMustSeeHaystack = (draft: TripDraft): string => {
+  const fromPlaces = (draft.mustSeePlaces ?? [])
+    .flatMap((p) => [p.label, p.customText, p.candidate?.name].filter(Boolean))
+    .join(" ");
+  return `${draft.preferences.mustSeeNotes} ${fromPlaces} ${draft.preferences.specialWishes}`.toLowerCase();
+};
+
+const haversineMeters = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+  const earthMeters = 6_371_000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthMeters * c;
+};
+
+const blockCoversLockedMustSee = (block: ActivityBlock, place: TripPlace): boolean => {
+  const hay = `${block.title} ${block.place?.name ?? ""}`.toLowerCase();
+  const label = place.label.trim().toLowerCase();
+  if (label.length > 0 && hay.includes(label)) {
+    return true;
+  }
+  if (place.mode === "custom") {
+    const raw = (place.customText ?? place.label).trim().toLowerCase();
+    return raw.length > 2 && hay.includes(raw);
+  }
+  const c = place.candidate;
+  if (!c) {
+    return false;
+  }
+  const name = c.name.trim().toLowerCase();
+  if (name.length > 0 && hay.includes(name)) {
+    return true;
+  }
+  const pid = block.place?.providerPlaceId;
+  if (pid && c.providerId && pid === c.providerId) {
+    return true;
+  }
+  if (
+    c.coordinates &&
+    block.place?.latitude !== undefined &&
+    block.place?.longitude !== undefined &&
+    typeof block.place.latitude === "number" &&
+    typeof block.place.longitude === "number"
+  ) {
+    const meters = haversineMeters(c.coordinates.lat, c.coordinates.lng, block.place.latitude, block.place.longitude);
+    if (meters < 120) {
+      return true;
+    }
+    if (meters < 450 && name.length > 0 && hay.includes(name.slice(0, Math.min(16, name.length)))) {
+      return true;
+    }
+  }
+  return false;
+};
+
 const isMustSeeBlock = (block: ActivityBlock, draft: TripDraft): boolean => {
-  const mustSee = `${draft.preferences.mustSeeNotes} ${draft.preferences.specialWishes}`.toLowerCase();
+  const mustSee = buildMustSeeHaystack(draft);
   if (!mustSee.trim()) {
     return false;
   }
 
   const signature = `${block.title} ${block.place?.name ?? ""} ${block.category}`.toLowerCase();
-  return mustSee.split(/[,;\n]/).map((item) => item.trim()).filter(Boolean).some((token) => signature.includes(token));
+  return mustSee.split(/[,;\n]/).map((item) => item.trim()).filter(Boolean).some((token) => token.length >= 2 && signature.includes(token));
 };
 
 export const tripFeasibilityService = {
@@ -122,11 +209,12 @@ export const tripFeasibilityService = {
     option: GeneratedTripOptions["options"][number],
     draft: TripDraft,
     forecast: WeatherContext[],
+    generationPlan: TravelBehaviorGenerationPlan | null = null,
   ): FeasibilityResult => {
     const warnings: PlanWarning[] = [];
     const duplicatePlaces = collectDuplicatePlaceNames(option.days);
-    const blocksLimit = maxBlocksForProfile(draft);
-    const activityThreshold = activeMinutesThreshold(draft);
+    const blocksLimit = maxBlocksForProfile(draft, generationPlan);
+    const activityThreshold = activeMinutesThreshold(draft, generationPlan);
 
     const nextDays = option.days.map((day) => {
       const dayWarnings: PlanWarning[] = [];
@@ -158,7 +246,24 @@ export const tripFeasibilityService = {
         );
       }
 
+      if (generationPlan?.slowPreferred) {
+        const majorStops = day.blocks.filter(isMajorSightBlock);
+        if (majorStops.length > 4) {
+          dayWarnings.push(
+            createWarning(
+              option.trip,
+              "route_issue",
+              "warning",
+              `${day.cityLabel} lists more than four major sights or deep activities, which may be heavy for your usual pace.`,
+              "Consider dropping or shortening one museum, gallery, or landmark so meals and rest still feel relaxed.",
+              majorStops.map((block) => block.id),
+            ),
+          );
+        }
+      }
+
       let activeMinutes = 0;
+      let unknownOpeningBlockCount = 0;
       day.blocks.forEach((block, index) => {
         activeMinutes += dayBlockDuration(block);
         activeMinutes += movementDuration(day.movementLegs?.[index]);
@@ -223,7 +328,13 @@ export const tripFeasibilityService = {
           );
         }
 
-        const openingFit = openingHoursService.getOpeningHoursFit(block.place?.openingHoursLabel, day.date, block.startTime, block.endTime);
+        const openingFit = openingHoursService.getOpeningHoursFit(
+          block.place?.openingHoursLabel,
+          day.date,
+          block.startTime,
+          block.endTime,
+          resolvePlanTimezone(option.trip, day.segmentId),
+        );
         if (openingFit === "closed") {
           dayWarnings.push(
             createWarning(
@@ -238,6 +349,7 @@ export const tripFeasibilityService = {
             ),
           );
         } else if (openingFit === "unknown") {
+          unknownOpeningBlockCount += 1;
           dayWarnings.push(
             createWarning(
               option.trip,
@@ -250,6 +362,15 @@ export const tripFeasibilityService = {
           );
         }
       });
+
+      if (unknownOpeningBlockCount > 0) {
+        logAnalyticsEvent(ANALYTICS_EVENTS.opening_hours_unknown, {
+          tripId: option.trip.id,
+          dayId: day.id,
+          date: day.date,
+          unknownBlockCount: unknownOpeningBlockCount,
+        });
+      }
 
       const dayForecast = matchingForecast(forecast, day.date);
       const outdoorBlocks = day.blocks.filter((block) => block.indoorOutdoor === "outdoor" || (block.indoorOutdoor === "mixed" && block.dependencies.weatherSensitive));
@@ -322,6 +443,22 @@ export const tripFeasibilityService = {
         validationStatus,
       };
     });
+
+    for (const place of draft.mustSeePlaces ?? []) {
+      const covered = option.days.some((day) => day.blocks.some((block) => blockCoversLockedMustSee(block, place)));
+      if (!covered) {
+        warnings.push(
+          createWarning(
+            option.trip,
+            "route_issue",
+            "warning",
+            `Locked must-see "${place.label}" is not represented as a stop on this plan.`,
+            "Regenerate or widen the city dates — the model should not silently ignore a locked must-see.",
+            [],
+          ),
+        );
+      }
+    }
 
     const score = warnings.reduce((current, warning) => current - (
       warning.severity === "critical" ? 18 : warning.severity === "warning" ? 9 : 3

@@ -32,11 +32,12 @@ export const TripCard = ({ trip, warningCount = 0, actionLabel, deleteLabel, onD
   return (
     <GlassPanel sx={{ p: 2.5, display: "grid", gap: 2 }}>
       <EntityPreviewImage
+        entityId={`trip:${trip.id}`}
+        variant="tripCard"
         title={primarySegment ? `${primarySegment.city}` : trip.destination}
         locationHint={primarySegment?.country ?? trip.destination}
         categoryHint="city"
-        alt={trip.destination}
-        height={172}
+        alt={`${trip.title} · ${trip.destination}`}
       />
       <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2, alignItems: "flex-start" }}>
         <Box>

@@ -3,6 +3,8 @@ import type { ActivityBlock } from "../../entities/activity/model";
 import type { DayPlan } from "../../entities/day-plan/model";
 import type { ReplanAction, ReplanProposal } from "../../entities/replan/model";
 import type { PlanWarning } from "../../entities/warning/model";
+import { ANALYTICS_EVENTS } from "../../features/observability/analyticsEvents";
+import { logAnalyticsEvent } from "../../features/observability/appLogger";
 import { movementPlanningService } from "../planning/movementPlanningService";
 
 interface ExecuteReplanProposalInput {
@@ -190,6 +192,27 @@ export const executeReplanProposal = async ({
   proposal,
   days,
 }: ExecuteReplanProposalInput): Promise<ReplanExecutionResult> => {
+  const actionTypes: Record<string, number> = {};
+  for (const action of proposal.actions) {
+    actionTypes[action.type] = (actionTypes[action.type] ?? 0) + 1;
+  }
+  const dayIdSet = new Set<string>();
+  for (const action of proposal.actions) {
+    if (action.fromDayId) {
+      dayIdSet.add(action.fromDayId);
+    }
+    if (action.toDayId) {
+      dayIdSet.add(action.toDayId);
+    }
+  }
+  logAnalyticsEvent(ANALYTICS_EVENTS.replan_triggered, {
+    tripId: proposal.tripId,
+    actionCount: proposal.actions.length,
+    reason: proposal.reason,
+    actionTypes,
+    uniqueDayIds: dayIdSet.size,
+  });
+
   const workingDays = new Map(days.map((day) => [day.id, { ...day, blocks: [...day.blocks], warnings: [...day.warnings] }]));
   const warnings: string[] = [];
   const appliedActionIds: string[] = [];

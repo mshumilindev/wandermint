@@ -9,9 +9,11 @@ import { nowIso } from "../../services/firebase/timestampMapper";
 
 interface AudioControlProps {
   userId: string;
+  /** Use inside a parent that already applies glass (e.g. shell header chrome). */
+  variant?: "chip" | "plain";
 }
 
-export const AudioControl = ({ userId }: AudioControlProps): JSX.Element => {
+export const AudioControl = ({ userId, variant = "chip" }: AudioControlProps): JSX.Element => {
   const { t } = useTranslation();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const preferences = useUserPreferencesStore((state) => state.preferences);
@@ -63,11 +65,18 @@ export const AudioControl = ({ userId }: AudioControlProps): JSX.Element => {
         <IconButton
           aria-label={label}
           onClick={() => void toggleAudio()}
-          sx={{
-            border: "1px solid var(--wm-glass-border)",
-            background: "rgba(8, 14, 20, 0.42)",
-            backdropFilter: "var(--wm-blur-panel)",
-          }}
+          sx={
+            variant === "plain"
+              ? {
+                  border: "1px solid rgba(183, 237, 226, 0.16)",
+                  background: "transparent",
+                }
+              : {
+                  border: "1px solid var(--wm-glass-border)",
+                  background: "rgba(8, 14, 20, 0.42)",
+                  backdropFilter: "var(--wm-blur-panel)",
+                }
+          }
         >
           {preferences?.audioMuted || isBlocked ? <MusicOffRoundedIcon /> : <MusicNoteRoundedIcon />}
         </IconButton>

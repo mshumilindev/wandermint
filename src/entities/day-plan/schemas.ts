@@ -20,6 +20,17 @@ export const placeSnapshotSchema = z.object({
   priceLevel: z.number().optional(),
   rating: z.number().optional(),
   capturedAt: z.string(),
+  planningSource: z.literal("bucket_list").optional(),
+  bucketListItemId: z.string().optional(),
+});
+
+const normalizedTripPlanItemSchema = z.object({
+  priority: z.enum(["must", "high", "medium", "low"]),
+  status: z.enum(["planned", "completed", "skipped"]),
+  estimatedDurationMinutes: z.number().nonnegative(),
+  travelTimeFromPreviousMinutes: z.number().nullable(),
+  imageUrl: z.string().optional(),
+  locationResolutionStatus: z.enum(["resolved", "missing", "estimated"]),
 });
 
 export const activityBlockSchema = z.object({
@@ -53,6 +64,8 @@ export const activityBlockSchema = z.object({
   priority: z.enum(["must", "should", "optional"]),
   locked: z.boolean(),
   completionStatus: z.enum(["pending", "in_progress", "unconfirmed", "done", "skipped", "missed", "cancelled_by_replan"]),
+  normalizedTripPlanItem: normalizedTripPlanItemSchema.optional(),
+  safetyWarningAcknowledged: z.boolean().optional(),
 });
 
 export const movementOptionSchema = z.object({
@@ -61,6 +74,7 @@ export const movementOptionSchema = z.object({
   estimatedCost: costRangeSchema.optional(),
   certainty: z.enum(["live", "partial"]),
   sourceName: z.string(),
+  estimateConfidence: z.enum(["high", "medium", "low"]).optional(),
 });
 
 export const movementLegSchema = z.object({

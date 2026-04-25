@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, type ReactNode } from "react";
 import { AuroraBackdrop } from "../../shared/ui/AuroraBackdrop";
 import { appTheme } from "../theme/theme";
+import { registerOfflineSyncListeners } from "../../features/offline/registerOfflineSync";
 import { useAuthStore } from "../store/useAuthStore";
 
 const queryClient = new QueryClient({
@@ -28,6 +29,11 @@ export const AppProviders = ({ children }: AppProvidersProps): JSX.Element => {
     const unsubscribe = startAuthListener();
     return () => unsubscribe();
   }, [startAuthListener]);
+
+  useEffect(() => {
+    const unsubscribe = registerOfflineSyncListeners();
+    return () => unsubscribe();
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>

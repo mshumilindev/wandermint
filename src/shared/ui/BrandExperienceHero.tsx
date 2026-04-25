@@ -38,7 +38,7 @@ export const BrandExperienceHero = ({ variant = "standard", sx }: BrandExperienc
           inset: 0,
           width: "100%",
           height: "100%",
-          objectFit: { xs: "contain", md: "cover" },
+          objectFit: "cover",
           objectPosition: "center",
         }}
       />

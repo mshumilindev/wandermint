@@ -17,6 +17,13 @@
       ]
     },
     {
+      "collectionGroup": "shares",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "token", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "tripChatMessages",
       "queryScope": "COLLECTION",
       "fields": [

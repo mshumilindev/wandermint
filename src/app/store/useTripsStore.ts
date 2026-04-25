@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { DayPlan } from "../../entities/day-plan/model";
 import type { Trip } from "../../entities/trip/model";
+import { migrateTripAndDays } from "../../features/trips/migrations/migrateTrip";
 import { tripDaysRepository } from "../../services/firebase/repositories/tripDaysRepository";
 import { tripsRepository } from "../../services/firebase/repositories/tripsRepository";
 import { cacheDurations, createIdleCacheMeta, isCacheFresh, type CacheMeta } from "../../shared/types/cache";
@@ -54,10 +55,11 @@ export const useTripsStore = create<TripsState>((set, get) => ({
   },
 
   saveGeneratedTrip: async (trip, days) => {
-    await tripsRepository.saveTrip(trip);
-    await tripDaysRepository.saveTripDays(days);
+    const migrated = migrateTripAndDays(trip, days);
+    await tripsRepository.saveTrip(migrated.trip);
+    await tripDaysRepository.saveTripDays(migrated.days);
     set((state) => ({
-      tripsById: { ...state.tripsById, [trip.id]: trip },
+      tripsById: { ...state.tripsById, [trip.id]: migrated.trip },
       tripIds: state.tripIds.includes(trip.id) ? state.tripIds : [trip.id, ...state.tripIds],
       selectedTripId: trip.id,
       listMeta: { ...state.listMeta, status: "success", isDirty: false, lastFetchedAt: state.listMeta.lastFetchedAt ?? Date.now() },
@@ -65,9 +67,10 @@ export const useTripsStore = create<TripsState>((set, get) => ({
   },
 
   saveTrip: async (trip) => {
-    await tripsRepository.saveTrip(trip);
+    const migrated = migrateTripAndDays(trip, []);
+    await tripsRepository.saveTrip(migrated.trip);
     set((state) => ({
-      tripsById: { ...state.tripsById, [trip.id]: trip },
+      tripsById: { ...state.tripsById, [trip.id]: migrated.trip },
       tripIds: state.tripIds.includes(trip.id) ? state.tripIds : [trip.id, ...state.tripIds],
       selectedTripId: trip.id,
       listMeta: { ...state.listMeta, status: "success", isDirty: false, lastFetchedAt: state.listMeta.lastFetchedAt ?? Date.now() },

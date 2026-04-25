@@ -10,7 +10,7 @@ export const localScenarioSchema = z.object({
   estimatedCostRange: costRangeSchema,
   weatherFit: z.enum(["excellent", "good", "risky", "indoor"]),
   routeLogic: z.string(),
-  blocks: z.array(activityBlockSchema).min(2).max(4),
+  blocks: z.array(activityBlockSchema).min(1).max(10),
   movementLegs: z.array(movementLegSchema).optional(),
   alternatives: z.array(z.string()),
   createdAt: z.string(),

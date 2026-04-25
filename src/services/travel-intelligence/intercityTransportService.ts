@@ -1,5 +1,6 @@
 import type { IntercityMove, TripSegment } from "../../entities/trip/model";
 import { createClientId } from "../../shared/lib/id";
+import type { SegmentTransportNodes } from "../transport/transportNodeTypes";
 import { publicGeoProvider } from "../providers/publicGeoProvider";
 import { pricingService } from "../pricing/pricingService";
 import { practicalRegions } from "./practicalRegions";
@@ -151,13 +152,43 @@ const geocodeSegment = async (segment: TripSegment): Promise<SegmentPoint> => {
   }
 };
 
+const hubCoords = (row: SegmentTransportNodes | undefined, role: "exit" | "entry"): { lat: number; lng: number } | null => {
+  const node = role === "exit" ? row?.exit : row?.entry;
+  const lat = node?.place.coordinates?.lat;
+  const lng = node?.place.coordinates?.lng;
+  if (lat === undefined || lng === undefined || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+  return { lat, lng };
+};
+
+const withHubOverride = (base: SegmentPoint, row: SegmentTransportNodes | undefined, role: "exit" | "entry"): SegmentPoint => {
+  const c = hubCoords(row, role);
+  if (!c) {
+    return base;
+  }
+  return { segment: base.segment, latitude: c.lat, longitude: c.lng };
+};
+
 export const intercityTransportService = {
-  createMoves: async (segments: TripSegment[], currency: string): Promise<IntercityMove[]> => {
+  createMoves: async (
+    segments: TripSegment[],
+    currency: string,
+    transportBySegment?: Partial<Record<string, SegmentTransportNodes>>,
+  ): Promise<IntercityMove[]> => {
     const points = await Promise.all(segments.map((segment) => geocodeSegment(segment)));
     return points.slice(1).map((point, index) => {
       const previous = points[index];
-      const distance = previous ? distanceKm(previous, point) : null;
-      const isSameRegion = previous ? practicalRegions.isRegionCompatible(previous.segment.country, point.segment.country) : false;
+      if (!previous) {
+        throw new Error("intercityTransportService.createMoves: missing previous segment");
+      }
+      const fromPoint = withHubOverride(previous, transportBySegment?.[previous.segment.id], "exit");
+      const toPoint = withHubOverride(point, transportBySegment?.[point.segment.id], "entry");
+      const usedPinnedHubs = Boolean(
+        hubCoords(transportBySegment?.[previous.segment.id], "exit") || hubCoords(transportBySegment?.[point.segment.id], "entry"),
+      );
+      const distance = distanceKm(fromPoint, toPoint);
+      const isSameRegion = practicalRegions.isRegionCompatible(previous.segment.country, point.segment.country);
       const type = chooseTransportType(distance, isSameRegion);
       const estimatedDurationMinutes = linehaulMinutes(distance, type);
       const stationOrAirportTransferMinutes = transferMinutes(type);
@@ -172,7 +203,7 @@ export const intercityTransportService = {
 
       return {
         id: createClientId("move"),
-        fromSegmentId: previous?.segment.id ?? "",
+        fromSegmentId: previous.segment.id,
         toSegmentId: point.segment.id,
         transportCandidates: [
           {
@@ -183,9 +214,11 @@ export const intercityTransportService = {
             baggageFriction: type === "flight" ? "high" : type === "train" ? "medium" : "low",
             estimatedCost: estimateCost(distance, type, localCurrency),
             sourceSnapshot: [
-              `Approximate movement estimate${distance !== null ? ` based on about ${Math.round(distance)} km between city centers` : " using regional distance assumptions"}.`,
+              usedPinnedHubs
+                ? `Approximate movement estimate${distance !== null ? ` based on about ${Math.round(distance)} km between user-pinned exit/entry transport hubs (where set) or city centers` : " using regional distance assumptions"}.`
+                : `Approximate movement estimate${distance !== null ? ` based on about ${Math.round(distance)} km between city centers` : " using regional distance assumptions"}.`,
               `Total movement window is about ${Math.round(totalMovementMinutes / 15) * 15} minutes including line-haul time, transfers, and buffer.`,
-              officialSourceHint(previous?.segment.country ?? "", point.segment.country, type),
+              officialSourceHint(previous.segment.country ?? "", point.segment.country, type),
             ].join(" "),
             feasibility: feasibility(totalMovementMinutes),
           },

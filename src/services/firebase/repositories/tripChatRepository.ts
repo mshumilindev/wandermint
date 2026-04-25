@@ -25,7 +25,7 @@ export interface TripChatMessage {
   createdAt: string;
 }
 
-const tripChatMessageSchema = z.object({
+export const tripChatMessageSchema = z.object({
   id: z.string(),
   userId: z.string(),
   tripId: z.string(),

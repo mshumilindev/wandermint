@@ -9,9 +9,11 @@ import { useTripsStore } from "../../../app/store/useTripsStore";
 import { BrandExperienceHero } from "../../../shared/ui/BrandExperienceHero";
 import { EmptyState } from "../../../shared/ui/EmptyState";
 import { GlassPanel } from "../../../shared/ui/GlassPanel";
-import { LoadingState } from "../../../shared/ui/LoadingState";
+import { TripCardsGridSkeleton } from "../../../shared/ui/skeletons/TripCardsGridSkeleton";
 import { SectionHeader } from "../../../shared/ui/SectionHeader";
 import { TripCard } from "../../trips/components/TripCard";
+import { SuggestedTripsSection } from "../../home/components/SuggestedTripsSection";
+import { TravelerJourneyView, useTravelerJourneyData } from "../../traveler-journey";
 
 export const HomePage = (): JSX.Element => {
   const { t } = useTranslation();
@@ -28,10 +30,15 @@ export const HomePage = (): JSX.Element => {
   }, [ensureTrips, user]);
 
   const trips = tripIds.map((tripId) => tripsById[tripId]).filter((trip): trip is NonNullable<typeof trip> => Boolean(trip));
+  const { journey, countriesByTripId } = useTravelerJourneyData(user?.id, trips);
 
   return (
     <Box sx={{ display: "grid", gap: 3 }}>
       <BrandExperienceHero />
+      {user ? (
+        <TravelerJourneyView journey={journey} countriesByTripId={countriesByTripId} variant="strip" />
+      ) : null}
+      <SuggestedTripsSection userId={user?.id} />
       <SectionHeader title={t("dashboard.launchTitle")} subtitle={t("dashboard.launchSubtitle")} />
       <Grid container spacing={2}>
         <Grid item xs={12} md={7}>
@@ -76,7 +83,7 @@ export const HomePage = (): JSX.Element => {
           </Button>
         }
       />
-      {meta.status === "loading" && trips.length === 0 ? <LoadingState /> : null}
+      {meta.status === "loading" && trips.length === 0 ? <TripCardsGridSkeleton variant="dashboard" /> : null}
       {trips.length === 0 && meta.status !== "loading" ? (
         <EmptyState title={t("trips.empty")} description={t("dashboard.emptyTrips")} />
       ) : (

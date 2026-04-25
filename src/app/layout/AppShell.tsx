@@ -1,11 +1,16 @@
 import AddLocationAltOutlinedIcon from "@mui/icons-material/AddLocationAltOutlined";
+import BookmarkAddOutlinedIcon from "@mui/icons-material/BookmarkAddOutlined";
 import DashboardOutlinedIcon from "@mui/icons-material/DashboardOutlined";
+import EmojiEventsOutlinedIcon from "@mui/icons-material/EmojiEventsOutlined";
+import BarChartOutlinedIcon from "@mui/icons-material/BarChartOutlined";
+import FormatListBulletedOutlinedIcon from "@mui/icons-material/FormatListBulletedOutlined";
 import LuggageOutlinedIcon from "@mui/icons-material/LuggageOutlined";
+import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import MenuRoundedIcon from "@mui/icons-material/MenuRounded";
 import PublicRoundedIcon from "@mui/icons-material/PublicRounded";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import StarBorderRoundedIcon from "@mui/icons-material/StarBorderRounded";
-import { Alert, AppBar, Avatar, Box, Button, Drawer, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Snackbar, Toolbar, Typography, useMediaQuery } from "@mui/material";
+import { Alert, AppBar, Avatar, Box, Drawer, Fab, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Snackbar, Toolbar, Tooltip, Typography, useMediaQuery } from "@mui/material";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
@@ -13,8 +18,20 @@ import { AudioControl } from "../../shared/ui/AudioControl";
 import { BrandLogo } from "../../shared/ui/BrandLogo";
 import { useAuthStore } from "../store/useAuthStore";
 import { useUiStore } from "../store/useUiStore";
+import { BucketListQuickAddDialog } from "../../features/bucket-list/components/BucketListQuickAddDialog";
+import { useBucketListQuickAddStore } from "../../features/bucket-list/bucketListQuickAddStore";
+import { setAnalyticsLocationConsentProvider } from "../../features/observability/appLogger";
+import { usePrivacySettingsStore } from "../store/usePrivacySettingsStore";
 import { useUserPreferencesStore } from "../store/useUserPreferencesStore";
 import { appTheme } from "../theme/theme";
+
+/** Same chrome as the top-right actions cluster (glass + blur). */
+const shellChromeSurface = {
+  background: "var(--wm-glass-panel)",
+  backdropFilter: "var(--wm-blur-panel)",
+  WebkitBackdropFilter: "var(--wm-blur-panel)",
+  boxShadow: "var(--wm-shadow-soft)",
+} as const;
 
 const navItems = [
   { to: "/home", labelKey: "nav.home", icon: <DashboardOutlinedIcon /> },
@@ -22,16 +39,22 @@ const navItems = [
   { to: "/trips", labelKey: "nav.trips", icon: <LuggageOutlinedIcon /> },
   { to: "/travel-map", labelKey: "nav.travelMap", icon: <PublicRoundedIcon /> },
   { to: "/saved", labelKey: "nav.saved", icon: <StarBorderRoundedIcon /> },
+  { to: "/bucket-list", labelKey: "nav.bucketList", icon: <FormatListBulletedOutlinedIcon /> },
+  { to: "/achievements", labelKey: "nav.achievements", icon: <EmojiEventsOutlinedIcon /> },
+  { to: "/analytics", labelKey: "nav.analytics", icon: <BarChartOutlinedIcon /> },
   { to: "/settings", labelKey: "nav.settings", icon: <SettingsOutlinedIcon /> },
 ] as const;
 
 const ShellNav = ({ onNavigate }: { onNavigate?: () => void }): JSX.Element => {
   const { t } = useTranslation();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const allowPersonalAnalytics = useUserPreferencesStore((s) => s.preferences?.allowPersonalAnalytics === true);
 
   return (
     <List sx={{ px: 1.5 }}>
-      {navItems.map((item) => (
+      {navItems
+        .filter((item) => item.to !== "/analytics" || allowPersonalAnalytics)
+        .map((item) => (
         <ListItemButton
           key={item.to}
           component={Link}
@@ -66,38 +89,28 @@ export const AppShell = (): JSX.Element => {
   const user = useAuthStore((state) => state.user);
   const signOutUser = useAuthStore((state) => state.signOutUser);
   const ensurePreferences = useUserPreferencesStore((state) => state.ensurePreferences);
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const ensurePrivacySettings = usePrivacySettingsStore((state) => state.ensurePrivacySettings);
+  const openBucketQuickAdd = useBucketListQuickAddStore((state) => state.openDialog);
 
   useEffect(() => {
     if (user?.id) {
       void ensurePreferences(user.id);
+      void ensurePrivacySettings(user.id);
     }
-  }, [ensurePreferences, user?.id]);
+  }, [ensurePreferences, ensurePrivacySettings, user?.id]);
 
-  const pageTitle = (() => {
-    if (pathname === "/home") return t("nav.home");
-    if (pathname === "/local") return t("nav.local");
-    if (pathname === "/trips") return t("nav.trips");
-    if (pathname === "/trips/new") return t("wizard.title");
-    if (pathname.startsWith("/trips/") && pathname.endsWith("/chat")) return t("chat.title");
-    if (pathname.startsWith("/trips/") && pathname.includes("/day/")) return t("trips.dayPlan");
-    if (pathname.startsWith("/trips/")) return t("trips.overview");
-    if (pathname === "/travel-map") return t("nav.travelMap");
-    if (pathname === "/saved") return t("nav.saved");
-    if (pathname === "/settings") return t("nav.settings");
-    return t("common.appName");
-  })();
+  useEffect(() => {
+    setAnalyticsLocationConsentProvider(() => usePrivacySettingsStore.getState().settings?.allowLocationDuringTrip === true);
+  }, []);
 
   const drawerContent = (
     <Box
       sx={{
         width: 268,
         height: "100%",
-        background:
-          "linear-gradient(180deg, rgba(3, 15, 23, 0.78), rgba(8, 11, 14, 0.62)), radial-gradient(circle at 24% 8%, rgba(33, 220, 195, 0.18), transparent 30%)",
-        backdropFilter: "var(--wm-blur-header)",
-        borderRight: "1px solid var(--wm-glass-border)",
-        boxShadow: "var(--wm-ambient-mint)",
+        border: "none",
+        borderRight: "none",
+        ...shellChromeSurface,
       }}
     >
       <Box sx={{ p: 3, display: "grid", justifyItems: "center", textAlign: "center", gap: 0.65 }}>
@@ -113,33 +126,96 @@ export const AppShell = (): JSX.Element => {
   return (
     <Box sx={{ display: "flex", minHeight: "100vh" }}>
       {isDesktop ? (
-        <Box component="aside" sx={{ width: 268, flexShrink: 0, position: "sticky", top: 0, alignSelf: "flex-start", height: "100vh" }}>
+        <Box
+          component="aside"
+          sx={{
+            width: 268,
+            flexShrink: 0,
+            position: "sticky",
+            top: 0,
+            alignSelf: "flex-start",
+            height: "100vh",
+            border: "none",
+            borderRight: "none",
+            outline: "none",
+            boxShadow: "none",
+          }}
+        >
           {drawerContent}
         </Box>
       ) : (
-        <Drawer open={sidebarOpen} onClose={() => setSidebarOpen(false)}>
+        <Drawer
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          PaperProps={{
+            sx: {
+              width: 268,
+              maxWidth: "100%",
+              background: "transparent",
+              border: "none",
+              borderRight: "none",
+              borderRadius: 0,
+              boxShadow: "none",
+              backgroundImage: "none",
+            },
+          }}
+        >
           {drawerContent}
         </Drawer>
       )}
 
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <AppBar position="sticky" elevation={0} sx={{ background: "rgba(3, 15, 23, 0.58)", backdropFilter: "var(--wm-blur-header)", borderBottom: "1px solid var(--wm-glass-border)" }}>
-          <Toolbar sx={{ gap: 2 }}>
+        <AppBar
+          position="sticky"
+          elevation={0}
+          sx={{
+            background: "transparent",
+            boxShadow: "none",
+            border: "none",
+            backgroundImage: "none",
+          }}
+        >
+          <Toolbar
+            sx={{
+              gap: 2,
+              minHeight: { xs: 56, sm: 60 },
+              background: "transparent",
+              borderBottom: "none",
+            }}
+          >
             {!isDesktop ? (
               <IconButton onClick={() => setSidebarOpen(true)} aria-label="menu">
                 <MenuRoundedIcon />
               </IconButton>
             ) : null}
-            <Box sx={{ flex: 1 }}>
-              <Typography variant="body2" color="text.secondary">
-                {pageTitle}
-              </Typography>
-            </Box>
-            {user ? <AudioControl userId={user.id} /> : null}
-            {user ? <Avatar src={user.avatarUrlHighRes ?? user.avatarUrl ?? undefined} alt={user.displayName} sx={{ width: 34, height: 34, border: "1px solid var(--wm-glass-border)" }} /> : null}
-            <Button color="inherit" onClick={() => void signOutUser()}>
-              {t("common.signOut")}
-            </Button>
+            <Box sx={{ flex: 1, minWidth: 0 }} />
+            {user ? (
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 1,
+                  flexShrink: 0,
+                  minHeight: 48,
+                  px: 1.25,
+                  py: 0.75,
+                  borderRadius: 999,
+                  ...shellChromeSurface,
+                }}
+              >
+                <AudioControl userId={user.id} variant="plain" />
+                <Avatar
+                  src={user.avatarUrlHighRes ?? user.avatarUrl ?? undefined}
+                  alt={user.displayName}
+                  sx={{ width: 34, height: 34, border: "1px solid var(--wm-glass-border)" }}
+                />
+                <Tooltip title={t("common.signOut")}>
+                  <IconButton color="inherit" edge="end" onClick={() => void signOutUser()} aria-label={t("common.signOut")} size="small">
+                    <LogoutRoundedIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            ) : null}
           </Toolbar>
         </AppBar>
         <Box component="main" sx={{ px: { xs: 2, md: 4 }, py: { xs: 3, md: 4 }, maxWidth: 1440, mx: "auto" }}>
@@ -164,6 +240,24 @@ export const AppShell = (): JSX.Element => {
             </Alert>
           </Snackbar>
         ))}
+        <BucketListQuickAddDialog />
+        {user ? (
+          <Tooltip title={t("bucketList.quickFab")}>
+            <Fab
+              color="primary"
+              aria-label={t("bucketList.quickFab")}
+              onClick={() => openBucketQuickAdd()}
+              sx={{
+                position: "fixed",
+                right: 24,
+                bottom: 96,
+                zIndex: (theme) => theme.zIndex.snackbar + 2,
+              }}
+            >
+              <BookmarkAddOutlinedIcon />
+            </Fab>
+          </Tooltip>
+        ) : null}
       </Box>
     </Box>
   );

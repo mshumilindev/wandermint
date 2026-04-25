@@ -1,3 +1,5 @@
+import type { FestivalSelection } from "../events/eventLookup.model";
+
 export type TripCompletionStatus =
   | "draft"
   | "active"
@@ -6,6 +8,8 @@ export type TripCompletionStatus =
   | "partially_completed"
   | "abandoned"
   | "archived";
+
+export type TripPlanningMode = "city_first" | "event_led";
 
 export interface DateRange {
   start: string;
@@ -79,6 +83,7 @@ export interface AnchorEvent {
   artistOrSeries?: string;
   city: string;
   country: string;
+  countryCode?: string;
   venue: string;
   startAt: string;
   endAt?: string;
@@ -87,6 +92,15 @@ export interface AnchorEvent {
   locked: boolean;
   ticketStatus: "interested" | "planned" | "booked";
   genreTags: string[];
+  timezone?: string;
+  sourceUrl?: string;
+  imageUrl?: string;
+  ticketUrl?: string;
+  provider?: "ticketmaster" | "bandsintown" | "songkick" | "manual" | "fallback";
+  providerEventId?: string;
+  latitude?: number;
+  longitude?: number;
+  festivalSelection?: FestivalSelection;
 }
 
 export interface IntercityMove {
@@ -146,6 +160,10 @@ export interface Trip {
   updatedAt: string;
   lastValidatedAt: string | null;
   planVersion: number;
+  /** Persisted data model version; omitted on legacy documents (treated as v1). */
+  schemaVersion?: number;
+  /** When true, anonymous clients may read this trip and its days if an active share link exists. */
+  publicReadEnabled?: boolean;
 }
 
 export interface TripSummary {

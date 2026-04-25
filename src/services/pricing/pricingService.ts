@@ -27,8 +27,34 @@ interface EstimateActivityCostInput extends PricingLookupInput {
 interface EstimateMovementCostInput extends PricingLookupInput {
   mode: MovementMode;
   distanceKm: number;
+  /** When set, urban public transport fares can follow time-ticket tiers (e.g. Warsaw ZTM-style PLN). */
+  durationMinutes?: number;
   budgetStyle?: TripBudget["style"];
 }
+
+/** Warsaw / Polish urban single-ride ticket bands by in-vehicle time (approximate ZTM-style fares). */
+const polishPublicTransitPln = (durationMinutes: number, budgetStyle: TripBudget["style"]): CostRange => {
+  const d = Math.max(1, Math.round(durationMinutes));
+  const lean = budgetStyle === "lean";
+  const premium = budgetStyle === "premium";
+
+  if (d <= 26) {
+    const fare = lean ? 4.4 : premium ? 4.8 : 4.6;
+    return { min: fare, max: fare, currency: "PLN", certainty: "exact" };
+  }
+  if (d <= 78) {
+    const fare = lean ? 6.4 : premium ? 6.8 : 6.6;
+    return { min: fare, max: fare, currency: "PLN", certainty: "exact" };
+  }
+  if (d <= 100) {
+    const fare = lean ? 7.0 : premium ? 7.5 : 7.2;
+    return { min: fare, max: fare, currency: "PLN", certainty: "exact" };
+  }
+  if (d <= 150) {
+    return { min: lean ? 7.0 : 7.5, max: premium ? 13 : 12, currency: "PLN", certainty: "estimated" };
+  }
+  return { min: lean ? 11 : 12, max: premium ? 22 : 20, currency: "PLN", certainty: "estimated" };
+};
 
 const conversionToEur: Record<string, number> = {
   EUR: 1,
@@ -180,7 +206,16 @@ export const pricingService = {
     };
   },
 
-  estimateMovementCost: ({ mode, distanceKm, place, city, country, locationLabel, budgetStyle = "balanced" }: EstimateMovementCostInput): CostRange | undefined => {
+  estimateMovementCost: ({
+    mode,
+    distanceKm,
+    durationMinutes,
+    place,
+    city,
+    country,
+    locationLabel,
+    budgetStyle = "balanced",
+  }: EstimateMovementCostInput): CostRange | undefined => {
     const resolved = pricingService.resolvePricingProfile({ place, city, country, locationLabel });
     const safeDistanceKm = Math.max(distanceKm, 0);
 
@@ -194,9 +229,26 @@ export const pricingService = {
     }
 
     if (mode === "public_transport") {
+      if (resolved.profile.currency === "PLN" && durationMinutes !== undefined) {
+        const tiered = polishPublicTransitPln(durationMinutes, budgetStyle);
+        const distanceFactor = safeDistanceKm > 18 ? 1.12 : safeDistanceKm > 12 ? 1.06 : 1;
+        if (tiered.certainty === "exact") {
+          const fare = Math.round(tiered.min * distanceFactor * 10) / 10;
+          return { min: fare, max: fare, currency: "PLN", certainty: "exact" };
+        }
+        return {
+          min: Math.round(tiered.min * distanceFactor * 10) / 10,
+          max: Math.round(tiered.max * distanceFactor * 10) / 10,
+          currency: "PLN",
+          certainty: "estimated",
+        };
+      }
+
       const [baseMin, baseMax] = chooseBand(resolved.profile, "localTransit", budgetStyle);
       const distanceFactor = safeDistanceKm > 12 ? 1.35 : safeDistanceKm > 6 ? 1.18 : 1;
-      const [min, max] = clampPair([baseMin, baseMax], distanceFactor);
+      const durationFactor =
+        durationMinutes === undefined ? 1 : durationMinutes > 120 ? 1.22 : durationMinutes > 75 ? 1.12 : durationMinutes > 35 ? 1.06 : 1;
+      const [min, max] = clampPair([baseMin, baseMax], distanceFactor * durationFactor);
       return {
         min,
         max,

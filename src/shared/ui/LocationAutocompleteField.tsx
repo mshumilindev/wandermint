@@ -214,7 +214,7 @@ export const LocationAutocompleteField = ({
           label={label}
           placeholder={placeholder}
           error={error}
-          helperText={error ? helperText : searchError ?? helperText}
+          helperText={error ? helperText : searchError ?? helperText ?? undefined}
           InputProps={{
             ...params.InputProps,
             startAdornment: (

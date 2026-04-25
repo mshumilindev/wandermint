@@ -47,6 +47,7 @@ export const appTheme = createTheme({
       styleOverrides: {
         body: {
           minHeight: "100vh",
+          colorScheme: "dark",
         },
       },
     },
@@ -205,6 +206,13 @@ export const appTheme = createTheme({
           backdropFilter: "var(--wm-blur-panel)",
           borderRadius: "10px",
           transition: "box-shadow 180ms ease, border-color 180ms ease",
+          "& input[type='date']::-webkit-calendar-picker-indicator, & input[type='month']::-webkit-calendar-picker-indicator, & input[type='time']::-webkit-calendar-picker-indicator, & input[type='datetime-local']::-webkit-calendar-picker-indicator":
+            {
+              cursor: "pointer",
+              opacity: 0.92,
+              filter:
+                "invert(82%) sepia(19%) saturate(1046%) hue-rotate(119deg) brightness(96%) contrast(92%)",
+            },
           "& fieldset": {
             borderColor: "rgba(183, 237, 226, 0.16)",
           },

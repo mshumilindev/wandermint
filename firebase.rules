@@ -19,8 +19,38 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/trips/$(tripId)).data.userId == request.auth.uid;
     }
 
+    function tripPublicReadable(tripId) {
+      return exists(/databases/$(database)/documents/trips/$(tripId))
+        && get(/databases/$(database)/documents/trips/$(tripId)).data.get('publicReadEnabled', false) == true;
+    }
+
+    function shareDocReadable() {
+      return resource.data.access == 'read_only'
+        && resource.data.get('revokedAt', null) == null;
+    }
+
     match /users/{userId} {
       allow read, write: if signedIn() && userId == request.auth.uid;
+    }
+
+    /** Summarized music taste + settings (no secrets — tokens stay client/session or Functions). */
+    match /users/{userId}/musicIntegrations/{document=**} {
+      allow read, write: if signedIn() && userId == request.auth.uid;
+    }
+
+    /** Aggregated travel behavior (no raw locations). */
+    match /users/{userId}/travelBehavior/{docId} {
+      allow read, write: if signedIn() && userId == request.auth.uid;
+    }
+
+    /** Learned taste affinities (category/cuisine/experience aggregates only). */
+    match /users/{userId}/personalTravelTaste/{docId} {
+      allow read, write: if signedIn() && userId == request.auth.uid;
+    }
+
+    /** Instagram (and other) tokens — Cloud Functions Admin SDK only. */
+    match /users/{userId}/integrations/{docId} {
+      allow read, write: if false;
     }
 
     match /userPreferences/{userId} {
@@ -28,12 +58,19 @@ service cloud.firestore {
     }
 
     match /trips/{tripId} {
-      allow read, update, delete: if ownsExisting();
+      allow read: if ownsExisting() || tripPublicReadable(tripId);
+      allow update, delete: if ownsExisting();
       allow create: if ownsIncoming();
     }
 
+    match /trips/{tripId}/shares/{shareId} {
+      allow read: if shareDocReadable();
+      allow create, update, delete: if signedIn() && ownsTrip(tripId);
+    }
+
     match /tripDays/{dayId} {
-      allow read, update, delete: if ownsExisting() && ownsTrip(resource.data.tripId);
+      allow read: if (ownsExisting() && ownsTrip(resource.data.tripId)) || tripPublicReadable(resource.data.tripId);
+      allow update, delete: if ownsExisting() && ownsTrip(resource.data.tripId);
       allow create: if ownsIncoming() && ownsTrip(request.resource.data.tripId);
     }
 
@@ -75,6 +112,11 @@ service cloud.firestore {
     match /travelMemories/{memoryId} {
       allow read, update, delete: if ownsExisting();
       allow create: if ownsIncoming();
+    }
+
+    /** FlickSync media library (`profiles/{uid}/library`) — same project; user-owned documents. */
+    match /profiles/{userId}/library/{itemId} {
+      allow read, create, update, delete: if signedIn() && userId == request.auth.uid;
     }
   }
 }

@@ -1,15 +1,30 @@
 import dayjs from "dayjs";
 import type { ActivityAlternative, ActivityBlock, ActivityBlockType, CostRange, PlaceSnapshot } from "../../entities/activity/model";
 import type { DayPlan } from "../../entities/day-plan/model";
+import type { RightNowExploreSpeed } from "../../entities/user/model";
 import type { LocalScenario } from "../../entities/local-scenario/model";
 import type { ReplanAction, ReplanProposal } from "../../entities/replan/model";
-import type { AnchorEvent, IntercityMove, TravelExecutionProfile, TravelSupportPlan, Trip, TripBudget, TripPreferences, TripSegment } from "../../entities/trip/model";
+import type {
+  AnchorEvent,
+  IntercityMove,
+  TravelExecutionProfile,
+  TravelSupportPlan,
+  Trip,
+  TripBudget,
+  TripPlanningMode,
+  TripPreferences,
+  TripSegment,
+} from "../../entities/trip/model";
 import { createClientId } from "../../shared/lib/id";
 import { nowIso } from "../firebase/timestampMapper";
-import type { ChatReplanResponse, GeneratedLocalScenarios, GeneratedTripOptions } from "./schemas";
+import { getRightNowBlockBounds } from "./promptBuilders/localScenarioPromptBuilder";
+import type { ChatReplanResponse, GeneratedLocalScenarios, GeneratedTripOptions, LocalScenarioChatResponse } from "./schemas";
+import type { TripOptionCountPlan } from "../planning/tripOptionCountService";
+import { resolveTripOptionCountFromDraft } from "../planning/tripOptionCountService";
 
 interface TripDraftLike {
   userId: string;
+  planningMode?: TripPlanningMode;
   destination: string;
   tripSegments: TripSegment[];
   dateRange: Trip["dateRange"];
@@ -25,9 +40,10 @@ interface LocalScenarioNormalizationContext {
   userId?: string;
   locationLabel: string;
   availableMinutes?: number;
+  exploreSpeed?: RightNowExploreSpeed;
 }
 
-const defaultTripOptionLabels = ["Balanced", "Cultural", "Food and night"] as const;
+const defaultTripOptionLabels = ["Balanced", "Cultural", "Food and night", "Comfort-forward", "High-impact", "Local depth"] as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
@@ -486,9 +502,17 @@ const deriveOptionVariant = (
   tradeoffs: [...base.tradeoffs],
 });
 
-export const normalizeGeneratedTripOptions = (raw: unknown, draft: TripDraftLike): GeneratedTripOptions => {
+export const normalizeGeneratedTripOptions = (raw: unknown, draft: TripDraftLike, plan?: TripOptionCountPlan): GeneratedTripOptions => {
+  const resolvedPlan =
+    plan ??
+    resolveTripOptionCountFromDraft({
+      planningMode: draft.planningMode ?? "city_first",
+      dateRange: draft.dateRange,
+      tripSegments: draft.tripSegments,
+      anchorEvents: draft.anchorEvents,
+    });
   const root = isRecord(raw) ? raw : {};
-  const rawOptions = asArray(root.options ?? raw).slice(0, 4);
+  const rawOptions = asArray(root.options ?? raw).slice(0, 12);
   const normalizedOptions = rawOptions
     .map((rawOption, index) => {
       if (!isRecord(rawOption)) {
@@ -520,16 +544,20 @@ export const normalizeGeneratedTripOptions = (raw: unknown, draft: TripDraftLike
     throw new Error("AI returned trip options that could not be repaired into a usable plan.");
   }
 
-  const bestThree = normalizedOptions.slice(0, 3);
-  while (bestThree.length < 3) {
-    const source = bestThree[bestThree.length - 1] ?? normalizedOptions[0];
+  const max = Math.min(5, Math.max(1, resolvedPlan.max));
+  const min = Math.min(max, Math.max(1, resolvedPlan.min));
+  let best = normalizedOptions.slice(0, max);
+  let guard = 0;
+  while (best.length < min && best.length < max && best.length > 0 && guard < max) {
+    const source = best[best.length - 1] ?? best[0];
     if (!source) {
       break;
     }
-    bestThree.push(deriveOptionVariant(source, bestThree.length));
+    best = [...best, deriveOptionVariant(source, best.length)];
+    guard += 1;
   }
 
-  return { options: bestThree };
+  return { options: best.slice(0, max) };
 };
 
 const normalizeScenario = (
@@ -546,7 +574,9 @@ const normalizeScenario = (
     .map((block, blockIndex) => normalizeBlock(block, blockIndex, "EUR"))
     .filter((block): block is ActivityBlock => Boolean(block));
 
-  if (blocks.length < 2) {
+  const bounds = getRightNowBlockBounds(Math.max(15, context.availableMinutes ?? 60), context.exploreSpeed ?? "balanced");
+  const trimmedBlocks = blocks.slice(0, bounds.max);
+  if (trimmedBlocks.length < 1) {
     return null;
   }
 
@@ -556,7 +586,7 @@ const normalizeScenario = (
     theme: asString(value.theme) ?? `Nearby option ${index + 1}`,
     locationLabel,
     estimatedDurationMinutes: Math.max(15, Math.round(asNumber(value.estimatedDurationMinutes) ?? context.availableMinutes ?? 90)),
-    estimatedCostRange: normalizeCostRange(value.estimatedCostRange, blocks[0]?.estimatedCost.currency ?? "EUR"),
+    estimatedCostRange: normalizeCostRange(value.estimatedCostRange, trimmedBlocks[0]?.estimatedCost.currency ?? "EUR"),
     weatherFit:
       asString(value.weatherFit) === "excellent" ||
       asString(value.weatherFit) === "good" ||
@@ -565,7 +595,7 @@ const normalizeScenario = (
         ? (asString(value.weatherFit) as LocalScenario["weatherFit"])
         : "good",
     routeLogic: asString(value.routeLogic) ?? "",
-    blocks,
+    blocks: trimmedBlocks,
     movementLegs: undefined,
     alternatives: asArray(value.alternatives).map((item) => asString(item)).filter((item): item is string => Boolean(item)),
     createdAt: asString(value.createdAt) ?? nowIso(),
@@ -673,5 +703,18 @@ export const normalizeChatReplanResponse = (raw: unknown): ChatReplanResponse =>
     assistantMessage,
     proposal,
     structuredPatchSummary,
+  };
+};
+
+export const normalizeLocalScenarioChatResponse = (raw: unknown, context: LocalScenarioNormalizationContext): LocalScenarioChatResponse => {
+  const root = isRecord(raw) ? raw : {};
+  const assistantMessage =
+    firstString(root.assistantMessage, root.message, root.content) ?? "Here is an adjusted idea for your right-now plan.";
+  const updatedRaw = root.updatedScenario ?? root.scenario;
+  const updatedScenario = updatedRaw ? normalizeScenario(updatedRaw, 0, context) : undefined;
+
+  return {
+    assistantMessage,
+    updatedScenario: updatedScenario ?? undefined,
   };
 };

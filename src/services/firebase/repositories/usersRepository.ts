@@ -5,6 +5,14 @@ import { firestoreCollections } from "../../../shared/config/product";
 import { firestoreDb } from "../firebaseApp";
 import { nowIso, timestampToIso } from "../timestampMapper";
 
+const instagramSummarySchema = z
+  .object({
+    connected: z.boolean(),
+    reconnectNeeded: z.boolean().optional(),
+    updatedAt: z.string().optional(),
+  })
+  .optional();
+
 const userProfileSchema = z.object({
   id: z.string(),
   displayName: z.string(),
@@ -14,6 +22,7 @@ const userProfileSchema = z.object({
   authProvider: z.literal("google"),
   createdAt: z.string(),
   updatedAt: z.string(),
+  instagramSummary: instagramSummarySchema,
 });
 
 export const normalizeGoogleAvatarUrl = (photoUrl: string | null): string | null => {

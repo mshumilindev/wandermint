@@ -1,105 +1,190 @@
 import LandscapeRoundedIcon from "@mui/icons-material/LandscapeRounded";
 import { Box, Typography, type SxProps, type Theme } from "@mui/material";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { wikimediaImageService } from "../../services/media/wikimediaImageService";
+import { useEffect, useMemo, useState } from "react";
+import {
+  buildEntityImageAlt,
+  ENTITY_IMAGE_VARIANT_LAYOUT,
+  getEntityImagePlaceholderCss,
+  resolveEntityImage,
+  type EntityImageVariant,
+  type ResolvedEntityImage,
+} from "../../services/media/entityImageResolver";
 
 interface EntityPreviewImageProps {
+  /** Visual preset: aspect ratio, thumb sizes, layout reserve */
+  variant?: EntityImageVariant;
+  /** Stable id for universal image cache (trip, activity, event, etc.). */
+  entityId?: string;
   title: string;
   locationHint?: string;
   categoryHint?: string;
-  alt: string;
-  height?: number | string | Record<string, number | string>;
-  aspectRatio?: string;
+  alt?: string;
+  existingImageUrl?: string | null;
+  apiImageUrl?: string | null;
+  providerImageUrl?: string | null;
+  googlePlacesPhotoUrl?: string | null;
+  latitude?: number;
+  longitude?: number;
   sx?: SxProps<Theme>;
+  /** @deprecated Use variant="compact" instead */
   compact?: boolean;
 }
 
 export const EntityPreviewImage = ({
+  variant: variantProp = "tripCard",
+  entityId,
   title,
   locationHint,
   categoryHint,
   alt,
-  height = 188,
-  aspectRatio,
+  existingImageUrl,
+  apiImageUrl,
+  providerImageUrl,
+  googlePlacesPhotoUrl,
+  latitude,
+  longitude,
   sx,
   compact = false,
 }: EntityPreviewImageProps): JSX.Element => {
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
-  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const variant: EntityImageVariant = compact ? "compact" : variantProp;
+  const layout = ENTITY_IMAGE_VARIANT_LAYOUT[variant];
+  const [resolved, setResolved] = useState<ResolvedEntityImage | null>(null);
+  const [broken, setBroken] = useState(false);
+
+  const resolvedAlt = useMemo(
+    () => alt ?? buildEntityImageAlt(title, locationHint, categoryHint),
+    [alt, title, locationHint, categoryHint],
+  );
 
   const fallbackLabel = useMemo(() => title.split(/[,\s]+/).slice(0, 2).join(" "), [title]);
 
+  const placeholderCss = useMemo(() => getEntityImagePlaceholderCss(title, categoryHint), [title, categoryHint]);
+
   useEffect(() => {
-    const element = viewportRef.current;
-    if (!element) {
-      return undefined;
-    }
+    setBroken(false);
+    setResolved(null);
+  }, [
+    entityId,
+    title,
+    locationHint,
+    categoryHint,
+    existingImageUrl,
+    apiImageUrl,
+    providerImageUrl,
+    googlePlacesPhotoUrl,
+    latitude,
+    longitude,
+    variant,
+  ]);
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (!entry?.isIntersecting) {
-          return;
-        }
+  useEffect(() => {
+    let active = true;
+    void resolveEntityImage({
+      entityId,
+      title,
+      locationHint,
+      categoryHint,
+      existingImageUrl: existingImageUrl ?? undefined,
+      apiImageUrl: apiImageUrl ?? undefined,
+      providerImageUrl: providerImageUrl ?? undefined,
+      googlePlacesPhotoUrl: googlePlacesPhotoUrl ?? undefined,
+      latitude,
+      longitude,
+      variant,
+    }).then((next) => {
+      if (active) {
+        setResolved(next);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [
+    entityId,
+    categoryHint,
+    existingImageUrl,
+    apiImageUrl,
+    providerImageUrl,
+    googlePlacesPhotoUrl,
+    latitude,
+    longitude,
+    locationHint,
+    title,
+    variant,
+  ]);
 
-        observer.disconnect();
-        void wikimediaImageService.resolveImage({ title, locationHint, categoryHint }).then((resolved) => {
-          setImageUrl(resolved);
-          setReady(true);
-        });
-      },
-      { rootMargin: "240px" },
-    );
-
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [categoryHint, locationHint, title]);
+  const showImage = Boolean(resolved?.primaryUrl) && !broken;
+  const underlayCss = resolved?.fallbackCss ?? placeholderCss;
+  const loading = resolved === null;
 
   return (
     <Box
-      ref={viewportRef}
       sx={{
         position: "relative",
         overflow: "hidden",
-        borderRadius: compact ? 2.25 : 2.75,
+        borderRadius: variant === "compact" ? 2.25 : 2.75,
         border: "1px solid rgba(183, 237, 226, 0.12)",
-        background:
-          "radial-gradient(circle at 18% 22%, rgba(33, 220, 195, 0.22), transparent 26%), radial-gradient(circle at 82% 14%, rgba(217, 162, 74, 0.18), transparent 22%), linear-gradient(180deg, rgba(7, 14, 20, 0.92), rgba(4, 9, 14, 0.98))",
-        height,
-        aspectRatio,
-        minHeight: compact ? 88 : undefined,
+        background: underlayCss,
+        width: "100%",
+        aspectRatio: layout.aspectRatio,
+        minHeight: layout.minHeight,
         boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.02)",
         ...sx,
       }}
     >
-      {imageUrl ? (
+      {loading ? (
+        <Box
+          aria-hidden
+          sx={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "linear-gradient(110deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.06) 42%, rgba(255,255,255,0) 78%)",
+            backgroundSize: "200% 100%",
+            animation: "wmEntityImgShimmer 1.1s ease-in-out infinite",
+            "@keyframes wmEntityImgShimmer": {
+              "0%": { backgroundPosition: "200% 0" },
+              "100%": { backgroundPosition: "-200% 0" },
+            },
+          }}
+        />
+      ) : null}
+
+      {showImage ? (
         <Box
           component="img"
-          src={imageUrl}
-          alt={alt}
+          src={resolved?.primaryUrl ?? undefined}
+          srcSet={resolved?.srcSet}
+          sizes={resolved?.sizes}
+          alt={resolvedAlt}
           loading="lazy"
+          decoding="async"
+          onError={() => setBroken(true)}
           sx={{
             position: "absolute",
             inset: 0,
             width: "100%",
             height: "100%",
             objectFit: "cover",
-            filter: "saturate(0.92) contrast(1.02) brightness(0.9)",
+            objectPosition: "center",
+            filter: "saturate(0.96) contrast(1.02) brightness(0.96)",
           }}
         />
       ) : null}
+
       <Box
         sx={{
           position: "absolute",
           inset: 0,
+          pointerEvents: "none",
           background:
-            imageUrl
+            showImage
               ? "linear-gradient(180deg, rgba(4, 9, 14, 0.08), rgba(4, 9, 14, 0.28) 48%, rgba(4, 9, 14, 0.72))"
               : "linear-gradient(180deg, rgba(4, 9, 14, 0.14), rgba(4, 9, 14, 0.46) 54%, rgba(4, 9, 14, 0.84))",
         }}
       />
-      {!imageUrl ? (
+
+      {!showImage ? (
         <Box
           sx={{
             position: "absolute",
@@ -108,10 +193,14 @@ export const EntityPreviewImage = ({
             placeItems: "center",
             color: "rgba(240, 248, 246, 0.84)",
             gap: 0.5,
+            px: 1,
           }}
         >
-          <LandscapeRoundedIcon sx={{ fontSize: compact ? 26 : 34, opacity: ready ? 0.46 : 0.62 }} />
-          <Typography variant={compact ? "caption" : "body2"} sx={{ letterSpacing: 0.4, opacity: 0.82 }}>
+          <LandscapeRoundedIcon sx={{ fontSize: variant === "compact" || variant === "activityThumb" ? 26 : 34, opacity: loading ? 0.5 : 0.62 }} />
+          <Typography
+            variant={variant === "compact" || variant === "activityThumb" ? "caption" : "body2"}
+            sx={{ letterSpacing: 0.4, opacity: 0.82, textAlign: "center", maxWidth: "100%" }}
+          >
             {fallbackLabel}
           </Typography>
         </Box>

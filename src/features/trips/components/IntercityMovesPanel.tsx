@@ -15,6 +15,9 @@ import { MetadataPill } from "../../../shared/ui/MetadataPill";
 interface IntercityMovesPanelProps {
   moves: IntercityMove[];
   segments: TripSegment[];
+  hideCosts?: boolean;
+  /** Hide free-text source lines (shared view without documents). */
+  hideDocumentHints?: boolean;
 }
 
 const formatMinutes = (minutes: number): string => {
@@ -51,7 +54,7 @@ const formatCost = (
   return formatEstimatedCostLabel(move, { preferredCurrency, locale });
 };
 
-export const IntercityMovesPanel = ({ moves, segments }: IntercityMovesPanelProps): JSX.Element | null => {
+export const IntercityMovesPanel = ({ moves, segments, hideCosts = false, hideDocumentHints = false }: IntercityMovesPanelProps): JSX.Element | null => {
   const { t } = useTranslation();
   const preferences = useUserPreferencesStore((state) => state.preferences);
   if (moves.length === 0) {
@@ -105,10 +108,10 @@ export const IntercityMovesPanel = ({ moves, segments }: IntercityMovesPanelProp
                 <MetadataPill icon={transportIcon(candidate.type)} label={t(`transport.type.${candidate.type}`)} tone="teal" />
                 <MetadataPill label={t("transport.totalWindow", { duration: formatMinutes(totalMinutes) })} />
                 <MetadataPill label={t("transport.buffer", { duration: formatMinutes(candidate.bufferMinutes) })} />
-                {costLabel ? <MetadataPill label={costLabel} tone="amber" /> : null}
+                {!hideCosts && costLabel ? <MetadataPill label={costLabel} tone="amber" /> : null}
                 <MetadataPill label={t(`transport.feasibility.${candidate.feasibility}`)} tone={candidate.feasibility === "easy" || candidate.feasibility === "possible" ? "teal" : "amber"} />
               </Box>
-              {candidate.sourceSnapshot ? (
+              {!hideDocumentHints && candidate.sourceSnapshot ? (
                 <Typography variant="caption" color="text.secondary">
                   {candidate.sourceSnapshot}
                 </Typography>

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { festivalSelectionSchema } from "../events/eventLookup.schema";
 
 export const dateRangeSchema = z.object({
   start: z.string().min(1),
@@ -65,6 +66,7 @@ export const anchorEventSchema = z.object({
   artistOrSeries: z.string().optional(),
   city: z.string(),
   country: z.string(),
+  countryCode: z.string().optional(),
   venue: z.string(),
   startAt: z.string(),
   endAt: z.string().optional(),
@@ -73,6 +75,15 @@ export const anchorEventSchema = z.object({
   locked: z.boolean(),
   ticketStatus: z.enum(["interested", "planned", "booked"]),
   genreTags: z.array(z.string()),
+  timezone: z.string().optional(),
+  sourceUrl: z.string().optional(),
+  imageUrl: z.string().optional(),
+  ticketUrl: z.string().optional(),
+  provider: z.enum(["ticketmaster", "bandsintown", "songkick", "manual", "fallback"]).optional(),
+  providerEventId: z.string().optional(),
+  latitude: z.number().optional(),
+  longitude: z.number().optional(),
+  festivalSelection: festivalSelectionSchema.optional(),
 });
 
 export const intercityMoveSchema = z.object({
@@ -137,4 +148,6 @@ export const tripSchema = z.object({
   updatedAt: z.string(),
   lastValidatedAt: z.string().nullable(),
   planVersion: z.number().int().nonnegative(),
+  schemaVersion: z.number().int().min(1).max(99).optional(),
+  publicReadEnabled: z.boolean().optional(),
 });

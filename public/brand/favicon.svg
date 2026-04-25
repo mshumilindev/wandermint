@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" preserveAspectRatio="xMidYMid meet">
+  <title>WanderMint</title>
+  <defs>
+    <linearGradient id="faviconTileBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#071218" />
+      <stop offset="42%" stop-color="#0d2538" />
+      <stop offset="100%" stop-color="#123d36" />
+    </linearGradient>
+    <linearGradient id="sky" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0d2538" />
+      <stop offset="100%" stop-color="#041018" />
+    </linearGradient>
+    <linearGradient id="mint" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#21dcc3" />
+      <stop offset="100%" stop-color="#16a090" />
+    </linearGradient>
+    <linearGradient id="rim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f5c57f" />
+      <stop offset="100%" stop-color="#c49a4a" />
+    </linearGradient>
+  </defs>
+  <!-- Rounded tile behind pin: readable on light browser tabs; brand navy → mint-teal. -->
+  <rect width="64" height="64" rx="14" fill="url(#faviconTileBg)" />
+  <!-- Pin silhouette; content inset ~12% for tab rounding / safe area (no clipping). -->
+  <path
+    fill="url(#sky)"
+    stroke="url(#rim)"
+    stroke-width="1.4"
+    d="M32 8.5c9.2 0 16.6 7.4 16.6 16.6 0 8.8-12.8 22.6-15.4 25.2a2.2 2.2 0 0 1-2.4 0C27.2 47.7 15.4 33.9 15.4 25.1 15.4 15.9 22.8 8.5 32 8.5Z"
+  />
+  <path fill="#0a1620" d="M22 26c2.8-4.2 6.8-6.8 10-6.8s7.2 2.6 10 6.8c-2.2 2.4-5.6 4-10 4s-7.8-1.6-10-4Z" opacity="0.9" />
+  <path fill="url(#mint)" d="M20 30 L26 24 L30 28 L36 22 L44 30 L40 34 L24 34 Z" opacity="0.95" />
+  <circle cx="44" cy="18" r="1.6" fill="#e8f4ff" opacity="0.95" />
+  <circle cx="40" cy="14" r="0.9" fill="#e8f4ff" opacity="0.75" />
+</svg>

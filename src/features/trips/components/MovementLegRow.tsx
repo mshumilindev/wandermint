@@ -5,6 +5,7 @@ import { Box, Typography } from "@mui/material";
 import type { MovementLeg, MovementMode } from "../../../entities/activity/model";
 import { useUserPreferencesStore } from "../../../app/store/useUserPreferencesStore";
 import { formatCostRangeLabel } from "../../../shared/lib/priceDisplay";
+import { useTranslation } from "react-i18next";
 
 interface MovementLegRowProps {
   leg: MovementLeg;
@@ -21,15 +22,23 @@ const iconForMode = (mode: MovementMode): JSX.Element => {
 };
 
 export const MovementLegRow = ({ leg }: MovementLegRowProps): JSX.Element => {
+  const { t } = useTranslation();
   const preferences = useUserPreferencesStore((state) => state.preferences);
-  const renderOptionLine = (mode: MovementMode, durationMinutes: number, costText: string, isPrimary = false): string => {
+  const renderOptionLine = (
+    mode: MovementMode,
+    durationMinutes: number,
+    costText: string,
+    isPrimary = false,
+    estimateConfidence?: "high" | "medium" | "low",
+  ): string => {
+    const approx = estimateConfidence === "low" ? ` (${t("trips.movement.approxTravel")})` : "";
     if (mode === "walking") {
-      return `${isPrimary ? "Walk about" : "Walk"} ${durationMinutes} min${costText}`;
+      return `${isPrimary ? "Walk about" : "Walk"} ${durationMinutes} min${approx}${costText}`;
     }
     if (mode === "public_transport") {
-      return `${isPrimary ? "Transit about" : "Transit"} ${durationMinutes} min${costText}`;
+      return `${isPrimary ? "Transit about" : "Transit"} ${durationMinutes} min${approx}${costText}`;
     }
-    return `${isPrimary ? "Taxi about" : "Taxi"} ${durationMinutes} min${costText}`;
+    return `${isPrimary ? "Taxi about" : "Taxi"} ${durationMinutes} min${approx}${costText}`;
   };
 
   const primaryCostText = leg.primary.estimatedCost
@@ -63,7 +72,13 @@ export const MovementLegRow = ({ leg }: MovementLegRowProps): JSX.Element => {
         ))}
       </Box>
       <Box sx={{ display: "grid", gap: 0.8 }}>
-        <Typography variant="body2">{renderOptionLine(leg.primary.mode, leg.primary.durationMinutes, primaryCostText, true)}</Typography>
+        <Typography
+          variant="body2"
+          color={leg.primary.estimateConfidence === "low" ? "warning.light" : "text.secondary"}
+          sx={leg.primary.estimateConfidence === "low" ? { fontStyle: "italic" } : undefined}
+        >
+          {renderOptionLine(leg.primary.mode, leg.primary.durationMinutes, primaryCostText, true, leg.primary.estimateConfidence)}
+        </Typography>
         {alternatives.map((option) => {
           const costText = option.estimatedCost
             && option.estimatedCost.max > 0
@@ -73,8 +88,13 @@ export const MovementLegRow = ({ leg }: MovementLegRowProps): JSX.Element => {
               })}`
             : "";
           return (
-            <Typography key={option.mode} variant="caption" color="text.secondary">
-              {renderOptionLine(option.mode, option.durationMinutes, costText)}
+            <Typography
+              key={option.mode}
+              variant="caption"
+              color={option.estimateConfidence === "low" ? "warning.light" : "text.secondary"}
+              sx={option.estimateConfidence === "low" ? { fontStyle: "italic" } : undefined}
+            >
+              {renderOptionLine(option.mode, option.durationMinutes, costText, false, option.estimateConfidence)}
             </Typography>
           );
         })}

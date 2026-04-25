@@ -2,8 +2,13 @@ import { initializeApp, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { defineSecret } from "firebase-functions/params";
 import { onRequest } from "firebase-functions/v2/https";
+import { logger } from "firebase-functions";
 import OpenAI from "openai";
 import { z } from "zod";
+import { eventsGateway } from "./eventsGateway.js";
+import { instagramSaveToken } from "./instagramSaveToken.js";
+import { mediaGateway } from "./mediaGateway.js";
+import { safePayloadMeta, validateGatewayPayloadForFlow, type ServerAiFlow } from "./aiGatewayPayloadGuard.js";
 
 if (getApps().length === 0) {
   initializeApp();
@@ -14,10 +19,13 @@ const openAiApiKey = defineSecret("OPENAI_API_KEY");
 const flowSchema = z.enum([
   "trip_generation",
   "local_scenario",
+  "local_scenario_chat",
   "trip_chat_replan",
   "trip_revalidation",
   "unfinished_day_recovery",
   "preference_learning",
+  "post_trip_analysis",
+  "live_decision_support",
 ]);
 
 type AiFlow = z.infer<typeof flowSchema>;
@@ -30,17 +38,22 @@ const gatewayRequestSchema = z.object({
 const endpointFlowMap: Record<string, AiFlow> = {
   "/trip-options": "trip_generation",
   "/local-scenarios": "local_scenario",
+  "/local-scenario-chat": "local_scenario_chat",
   "/trip-chat": "trip_chat_replan",
   "/trip-revalidation": "trip_revalidation",
   "/unfinished-day-recovery": "unfinished_day_recovery",
   "/preference-learning": "preference_learning",
+  "/post-trip-analysis": "post_trip_analysis",
+  "/live-decision-support": "live_decision_support",
 };
 
 const flowOutputContracts: Record<AiFlow, string> = {
   trip_generation:
     "Return JSON {\"options\":[exactly 3 objects]}. Each option must include optionId, label, positioning, trip, days, tradeoffs. trip must include id,userId,title,destination,tripSegments,dateRange,flightInfo,hotelInfo,budget,preferences,status,createdAt,updatedAt,lastValidatedAt,planVersion, and should include executionProfile, anchorEvents, intercityMoves, travelSupport when payload provides them. Each day must include id,userId,tripId,segmentId,cityLabel,countryLabel,date,theme,blocks,estimatedCostRange,validationStatus,warnings,completionStatus,updatedAt. Assign each day to the correct trip segment, include transfer blocks when moving between cities, preserve locked anchor events, add realistic buffers, surface dense/risky days as warnings or support notes. Use payload.destinationDiscovery for attractions, museums, local food, traditional drinks, nearby places, day trips, and parsed user must-see requests. Never invent ratings, availability, or factual reputation; if a must-see item is low-confidence or weakly grounded, propose provider-grounded alternatives and explain the tradeoff in tradeoffs or warnings. Each activity block must include id,type,title,description,startTime,endTime,category,tags,indoorOutdoor,estimatedCost,dependencies,alternatives,sourceSnapshots,priority,locked,completionStatus.",
   local_scenario:
-    "Return JSON {\"scenarios\":[1 to 4 objects]}. Each scenario must include id,userId optional,theme,locationLabel,estimatedDurationMinutes,estimatedCostRange,weatherFit,routeLogic,blocks,alternatives,createdAt. estimatedCostRange must include min,max,currency,certainty. Each scenario must have 2 to 4 blocks. Each block must include id,type(activity|meal|transfer|rest),title,description,startTime,endTime,place optional,category,tags,indoorOutdoor,estimatedCost,dependencies,alternatives,sourceSnapshots,priority,locked,completionStatus. dependencies must include weatherSensitive,bookingRequired,openingHoursSensitive,priceSensitive. Use provided places as sourceSnapshots when available; if exact price is unknown use estimated or unknown certainty.",
+    "Return JSON {\"scenarios\":[1 to 4 objects]}. Each scenario must include id,userId optional,theme,locationLabel,estimatedDurationMinutes,estimatedCostRange,weatherFit,routeLogic,blocks,alternatives,createdAt. estimatedCostRange must include min,max,currency,certainty. Each scenario must have 1 to 10 blocks; choose the count that fits the user's available minutes and explore-speed instructions in the prompt (never pad weak stops). Each block must include id,type(activity|meal|transfer|rest),title,description,startTime,endTime,place optional,category,tags,indoorOutdoor,estimatedCost,dependencies,alternatives,sourceSnapshots,priority,locked,completionStatus. dependencies must include weatherSensitive,bookingRequired,openingHoursSensitive,priceSensitive. Use provided places as sourceSnapshots when available; if exact price is unknown use estimated or unknown certainty.",
+  local_scenario_chat:
+    "Return JSON {\"assistantMessage\":\"...\",\"updatedScenario\": optional full LocalScenario}. Preserve scenario id from payload when returning updatedScenario. When the user asks to replace, remove, reorder, or add a stop, return updatedScenario with revised blocks and coherent times; otherwise omit updatedScenario and only reply in assistantMessage.",
   trip_chat_replan:
     "Return JSON {\"assistantMessage\":\"...\",\"structuredPatchSummary\":\"...\",\"proposal\": optional ReplanProposal}. If proposing edits, proposal must include id,userId,tripId,createdAt,reason,summary,actions. Actions must be move_activity, remove_activity, replace_activity, or compress_day.",
   trip_revalidation:
@@ -49,6 +62,10 @@ const flowOutputContracts: Record<AiFlow, string> = {
     "Return JSON {\"assistantMessage\":\"...\",\"structuredPatchSummary\":\"...\",\"proposal\": ReplanProposal}. Preserve must/locked items and completion history.",
   preference_learning:
     "Return JSON {\"assistantMessage\":\"...\",\"structuredPatchSummary\":\"...\"}. Suggest preference learning from completion and skipping patterns without modifying data directly.",
+  post_trip_analysis:
+    "Return JSON {\"structuredInsights\":[{\"key\":\"...\",\"detail\":\"...\",\"weight\":\"low|medium|high\"}],\"followUpActions\":[{\"id\":\"...\",\"label\":\"...\",\"kind\":\"preference|trip_style|logistics|other\"}],\"summaryForUi\":\"...\"}. summaryForUi max 2000 chars. No other top-level keys.",
+  live_decision_support:
+    "Return JSON {\"statusLine\":\"...\",\"rationaleBullets\":[\"...\"],\"suggestedUiActions\":[\"continue\"|\"skip_next_low_priority\"|\"shorten_current_item\"|\"reorder_remaining\"|\"end_day\"|\"open_day_editor\"],\"confidence\":\"low|medium|high\"}. statusLine max 400 chars. No other top-level keys.",
 };
 
 const createSystemPrompt = (flow: AiFlow): string =>
@@ -129,6 +146,22 @@ export const aiGateway = onRequest(
       return;
     }
 
+    const payloadGuard = validateGatewayPayloadForFlow(flow as ServerAiFlow, parsed.data.payload);
+    if (!payloadGuard.success) {
+      logger.warn("aiGateway.request_rejected", {
+        flow,
+        issuePaths: payloadGuard.error.issues.map((i) => i.path.join(".") || "root").slice(0, 40),
+        issueCodes: payloadGuard.error.issues.map((i) => i.code).slice(0, 40),
+      });
+      response.status(400).json({ error: "Invalid payload for this flow" });
+      return;
+    }
+
+    logger.info("aiGateway.request_accepted", {
+      flow,
+      meta: safePayloadMeta(flow as ServerAiFlow, parsed.data.payload as Record<string, unknown>),
+    });
+
     const client = new OpenAI({ apiKey: openAiApiKey.value() });
 
     try {
@@ -140,7 +173,7 @@ export const aiGateway = onRequest(
           {
             role: "user",
             content: JSON.stringify({
-              authenticatedUserId: userId,
+              authenticatedUserPresent: true,
               payload: parsed.data.payload,
             }),
           },
@@ -161,3 +194,5 @@ export const aiGateway = onRequest(
     }
   },
 );
+
+export { mediaGateway, instagramSaveToken, eventsGateway };

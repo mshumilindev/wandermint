@@ -1,8 +1,18 @@
 import dayjs from "dayjs";
 import type { ActivityAlternative, ActivityBlock, CostRange, PlaceSnapshot } from "../../entities/activity/model";
+import type { PlaceExperienceMemory } from "../../entities/place-memory/model";
+import type { TravelMemory } from "../../entities/travel-memory/model";
+import type { RightNowExploreSpeed, UserPreferences } from "../../entities/user/model";
 import { createClientId } from "../../shared/lib/id";
+import { NotEnoughGroundedDataError } from "../../shared/lib/appErrors";
+import { debugLogError } from "../../shared/lib/errors";
 import { openAiGatewayClient } from "../ai/openAiGatewayClient";
-import { buildLocalScenarioPrompt } from "../ai/promptBuilders/localScenarioPromptBuilder";
+import {
+  buildLocalScenarioPrompt,
+  getRightNowBlockBounds,
+  type LocalScenarioTimeContext,
+  type RightNowSpendTier,
+} from "../ai/promptBuilders/localScenarioPromptBuilder";
 import { generatedLocalScenariosSchema, type GeneratedLocalScenarios } from "../ai/schemas";
 import type { DestinationDiscovery, DiscoveryItem, RouteContext, WeatherContext } from "../providers/contracts";
 import { publicDiscoveryProvider } from "../providers/publicDiscoveryProvider";
@@ -16,6 +26,9 @@ import { detectFoodCrawlIntent, optimizeItineraryBlocks, scoreItineraryCompositi
 import { movementPlanningService } from "./movementPlanningService";
 import { openingHoursService } from "./openingHoursService";
 import { sanitizeUserFacingDescription, sanitizeUserFacingLine } from "../../shared/lib/userFacingText";
+import { buildPlanningContext } from "./planningContextBuilder";
+import { buildMusicPlanningSignals, getEnabledMusicPersonalization } from "../personalization/music/musicPersonalizationService";
+import type { MusicPlanningSignals } from "../../integrations/music/musicTypes";
 
 interface LocalScenarioRequest {
   userId?: string;
@@ -24,7 +37,14 @@ interface LocalScenarioRequest {
   longitude?: number;
   vibe: string;
   availableMinutes: number;
+  /** Right-now spend posture: influences search weights and AI prompt. */
+  rightNowSpendTier?: RightNowSpendTier;
+  userPreferences?: UserPreferences | null;
+  travelMemories?: TravelMemory[];
+  placeMemories?: PlaceExperienceMemory[];
 }
+
+const resolveExploreSpeed = (prefs?: UserPreferences | null): RightNowExploreSpeed => prefs?.rightNowExploreSpeed ?? "balanced";
 
 type LocalScenarioProgressStep =
   | "locating_precisely"
@@ -32,7 +52,8 @@ type LocalScenarioProgressStep =
   | "finding_nearby_places"
   | "estimating_movement"
   | "composing_scenarios"
-  | "refining_with_ai";
+  | "refining_with_ai"
+  | "polishing_itinerary";
 
 interface LocalScenarioGenerationHooks {
   onStep?: (step: LocalScenarioProgressStep) => void;
@@ -178,29 +199,47 @@ const filterLocalPlaces = (
   },
 ): PlaceSnapshot[] => places.filter((place) => isPlaceInsideLocalArea(place, point, context, options));
 
-const vibeWeights = (vibe: string): Record<CandidateKind, number> => {
+const vibeWeights = (vibe: string, spendTier?: RightNowSpendTier): Record<CandidateKind, number> => {
   const normalized = vibe.toLowerCase();
 
+  let base: Record<CandidateKind, number>;
   if (normalized.includes("cinema")) {
-    return { cinema: 1.35, food: 1.2, cafe: 0.8, drinks: 0.95, culture: 0.45, walk: 0.6 };
-  }
-  if (normalized.includes("rain")) {
-    return { culture: 1.25, cafe: 1.1, food: 1, drinks: 0.85, cinema: 1.1, walk: 0.2 };
-  }
-  if (normalized.includes("social")) {
-    return { drinks: 1.25, food: 1.05, cafe: 1.1, culture: 0.7, cinema: 0.65, walk: 0.8 };
-  }
-  if (normalized.includes("date")) {
-    return { cafe: 1.2, food: 1.15, culture: 1, drinks: 1.05, cinema: 0.7, walk: 0.95 };
-  }
-  if (normalized.includes("culture")) {
-    return { culture: 1.35, walk: 1.1, cafe: 0.9, food: 0.75, drinks: 0.55, cinema: 0.45 };
+    base = { cinema: 1.35, food: 1.2, cafe: 0.8, drinks: 0.95, culture: 0.45, walk: 0.6 };
+  } else if (normalized.includes("rain")) {
+    base = { culture: 1.25, cafe: 1.1, food: 1, drinks: 0.85, cinema: 1.1, walk: 0.2 };
+  } else if (normalized.includes("social")) {
+    base = { drinks: 1.25, food: 1.05, cafe: 1.1, culture: 0.7, cinema: 0.65, walk: 0.8 };
+  } else if (normalized.includes("date")) {
+    base = { cafe: 1.2, food: 1.15, culture: 1, drinks: 1.05, cinema: 0.7, walk: 0.95 };
+  } else if (normalized.includes("culture")) {
+    base = { culture: 1.35, walk: 1.1, cafe: 0.9, food: 0.75, drinks: 0.55, cinema: 0.45 };
+  } else {
+    base = { cafe: 1.2, culture: 1.1, walk: 1.05, food: 0.95, drinks: 0.65, cinema: 0.5 };
   }
 
-  return { cafe: 1.2, culture: 1.1, walk: 1.05, food: 0.95, drinks: 0.65, cinema: 0.5 };
+  if (spendTier === "free") {
+    return {
+      ...base,
+      walk: base.walk * 1.55,
+      culture: base.culture * 1.12,
+      cafe: base.cafe * 0.72,
+      drinks: base.drinks * 0.22,
+      food: base.food * 0.82,
+      cinema: base.cinema * 0.55,
+    };
+  }
+  if (spendTier === "low") {
+    return {
+      ...base,
+      walk: base.walk * 1.28,
+      drinks: base.drinks * 0.58,
+      cinema: base.cinema * 0.82,
+    };
+  }
+  return base;
 };
 
-const categoryBundlesForVibe = (vibe: string): Array<{ kind: CandidateKind; categories: string[] }> => {
+const categoryBundlesForVibe = (vibe: string, spendTier?: RightNowSpendTier): Array<{ kind: CandidateKind; categories: string[] }> => {
   const normalized = vibe.toLowerCase();
   const baseBundles: Array<{ kind: CandidateKind; categories: string[] }> = [
     { kind: "cafe", categories: ["cafe"] },
@@ -209,20 +248,31 @@ const categoryBundlesForVibe = (vibe: string): Array<{ kind: CandidateKind; cate
     { kind: "walk", categories: ["attraction"] },
   ];
 
+  let bundles: Array<{ kind: CandidateKind; categories: string[] }>;
   if (normalized.includes("cinema")) {
-    return [{ kind: "cinema", categories: ["cinema"] }, { kind: "food", categories: ["food"] }, { kind: "walk", categories: ["attraction"] }, { kind: "drinks", categories: ["drinks"] }];
-  }
-  if (normalized.includes("rain")) {
-    return [{ kind: "culture", categories: ["museum", "gallery"] }, { kind: "cafe", categories: ["cafe"] }, { kind: "food", categories: ["food"] }, { kind: "cinema", categories: ["cinema"] }];
-  }
-  if (normalized.includes("social")) {
-    return [{ kind: "drinks", categories: ["drinks"] }, { kind: "food", categories: ["food"] }, { kind: "cafe", categories: ["cafe"] }, { kind: "walk", categories: ["attraction"] }];
-  }
-  if (normalized.includes("date")) {
-    return [{ kind: "cafe", categories: ["cafe"] }, { kind: "culture", categories: ["gallery", "museum"] }, { kind: "food", categories: ["food"] }, { kind: "walk", categories: ["attraction"] }];
+    bundles = [{ kind: "cinema", categories: ["cinema"] }, { kind: "food", categories: ["food"] }, { kind: "walk", categories: ["attraction"] }, { kind: "drinks", categories: ["drinks"] }];
+  } else if (normalized.includes("rain")) {
+    bundles = [{ kind: "culture", categories: ["museum", "gallery"] }, { kind: "cafe", categories: ["cafe"] }, { kind: "food", categories: ["food"] }, { kind: "cinema", categories: ["cinema"] }];
+  } else if (normalized.includes("social")) {
+    bundles = [{ kind: "drinks", categories: ["drinks"] }, { kind: "food", categories: ["food"] }, { kind: "cafe", categories: ["cafe"] }, { kind: "walk", categories: ["attraction"] }];
+  } else if (normalized.includes("date")) {
+    bundles = [{ kind: "cafe", categories: ["cafe"] }, { kind: "culture", categories: ["gallery", "museum"] }, { kind: "food", categories: ["food"] }, { kind: "walk", categories: ["attraction"] }];
+  } else {
+    bundles = baseBundles;
   }
 
-  return baseBundles;
+  if (spendTier === "free") {
+    const lean = bundles.filter((b) => b.kind !== "drinks" && b.kind !== "cinema");
+    const walks = lean.filter((b) => b.kind === "walk");
+    const rest = lean.filter((b) => b.kind !== "walk");
+    return [...walks, ...rest];
+  }
+  if (spendTier === "low") {
+    const walk = bundles.find((b) => b.kind === "walk");
+    const others = bundles.filter((b) => b.kind !== "walk");
+    return walk ? [walk, ...others] : bundles;
+  }
+  return bundles;
 };
 
 const uniquePlaces = (places: PlaceSnapshot[]): PlaceSnapshot[] => {
@@ -495,7 +545,29 @@ const categoryForKind = (kind: CandidateKind): string => {
   return kind;
 };
 
-const blueprintKindsForVibe = (vibe: string, availableMinutes: number): CandidateKind[][] => {
+const padBlueprintRow = (row: CandidateKind[], targetLength: number): CandidateKind[] => {
+  if (targetLength <= 0) {
+    return [];
+  }
+  if (row.length >= targetLength) {
+    return row.slice(0, targetLength);
+  }
+
+  const fillers: CandidateKind[] = ["walk", "cafe", "culture", "food", "drinks"];
+  const out = [...row];
+  let index = 0;
+  while (out.length < targetLength && index < 40) {
+    const next = fillers[index % fillers.length] ?? "walk";
+    if (out[out.length - 1] !== next) {
+      out.push(next);
+    }
+    index += 1;
+  }
+
+  return out.slice(0, targetLength);
+};
+
+const baseBlueprintKindsForVibe = (vibe: string, availableMinutes: number): CandidateKind[][] => {
   const normalized = vibe.toLowerCase();
   const longFlow = availableMinutes >= 120;
 
@@ -530,6 +602,12 @@ const blueprintKindsForVibe = (vibe: string, availableMinutes: number): Candidat
     : [["cafe", "walk"], ["cafe", "culture"], ["food", "walk"]];
 };
 
+const blueprintKindsForVibe = (vibe: string, availableMinutes: number, maxStops: number): CandidateKind[][] => {
+  const base = baseBlueprintKindsForVibe(vibe, availableMinutes);
+  const engineCap = Math.min(6, Math.max(1, maxStops));
+  return base.map((row) => padBlueprintRow(row, engineCap));
+};
+
 const candidateScore = (candidate: CandidatePlace): number => candidate.relevanceScore * 100 - candidate.distanceMeters / 35;
 
 const buildCandidatePools = (
@@ -537,8 +615,9 @@ const buildCandidatePools = (
   vibe: string,
   bundledPlaces: Array<{ kind: CandidateKind; places: PlaceSnapshot[] }>,
   discovery: DestinationDiscovery,
+  spendTier?: RightNowSpendTier,
 ): Record<CandidateKind, CandidatePlace[]> => {
-  const weights = vibeWeights(vibe);
+  const weights = vibeWeights(vibe, spendTier);
   const pools: Record<CandidateKind, CandidatePlace[]> = {
     cafe: [],
     culture: [],
@@ -682,38 +761,43 @@ const buildRankedScenarios = (
   candidatePools: Record<CandidateKind, CandidatePlace[]>,
   route: RouteContext,
   discovery: DestinationDiscovery,
+  planningContext: ReturnType<typeof buildPlanningContext>,
 ): GeneratedLocalScenarios["scenarios"] => {
   const usesIndoorPlan = weather.precipitationChance >= 45 || request.vibe.toLowerCase().includes("rain");
   const mustSeeHints = discovery.mustSee;
-  const blueprints = blueprintKindsForVibe(request.vibe, request.availableMinutes);
+  const exploreBounds = getRightNowBlockBounds(request.availableMinutes, resolveExploreSpeed(request.userPreferences));
+  const blueprints = blueprintKindsForVibe(request.vibe, request.availableMinutes, exploreBounds.max);
   const allowFoodCrawl = detectFoodCrawlIntent(request.vibe);
   const scenarioDate = dayjs().format("YYYY-MM-DD");
   const rankedScenarios: Array<GeneratedLocalScenarios["scenarios"][number] & { rankingScore: number }> = [];
 
   for (const blueprint of blueprints) {
     for (let offset = 0; offset < 8; offset += 1) {
-      const windows = createTimeWindows(request.availableMinutes, blueprint.length);
+      const pickWindows = createTimeWindows(request.availableMinutes, blueprint.length);
       const usedPlaceNames = new Set<string>();
-      const candidates = blueprint
+      const rawCandidates = blueprint
         .map((kind, index) =>
           chooseCandidate(
             candidatePools[kind],
             usedPlaceNames,
             Math.min(offset + index, 5),
             scenarioDate,
-            windows[index]?.start ?? "18:00",
-            windows[index]?.end ?? "18:45",
+            pickWindows[index]?.start ?? "18:00",
+            pickWindows[index]?.end ?? "18:45",
           ),
         )
         .filter((candidate): candidate is CandidatePlace => Boolean(candidate));
 
-      candidates.forEach((candidate) => {
+      rawCandidates.forEach((candidate) => {
         usedPlaceNames.add(normalizeToken(candidate.place.name));
       });
 
-      if (candidates.length < Math.min(blueprint.length, request.availableMinutes >= 90 ? 3 : 2)) {
+      const candidates = rawCandidates.slice(0, exploreBounds.max);
+      if (candidates.length < exploreBounds.min) {
         continue;
       }
+
+      const windows = createTimeWindows(request.availableMinutes, candidates.length);
 
       const provisionalBlocks = candidates.map((candidate, index) =>
         createActivityBlock(
@@ -738,6 +822,20 @@ const buildRankedScenarios = (
         preserveAnchors: false,
       });
       const blocks = optimized.blocks;
+      const contextualBlocks = blocks.map((block) => {
+        const signal = planningContext.scorePlace({
+          name: block.place?.name ?? block.title,
+          city: block.place?.city,
+          country: block.place?.country,
+        });
+        if (!signal.explanation) {
+          return block;
+        }
+        return {
+          ...block,
+          description: `${block.description}${block.description ? " " : ""}Source note: ${signal.explanation}.`,
+        };
+      });
 
       const averageDistance = candidates.reduce((sum, candidate) => sum + candidate.distanceMeters, 0) / candidates.length;
       const rankingScore =
@@ -751,10 +849,10 @@ const buildRankedScenarios = (
         theme: sanitizeUserFacingLine(themeFromKinds(request.vibe, blueprint, candidates.map((candidate) => candidate.place))),
         locationLabel: point.label,
         estimatedDurationMinutes: request.availableMinutes,
-        estimatedCostRange: totalCost(blocks),
+        estimatedCostRange: totalCost(contextualBlocks),
         weatherFit: weatherFit(weather, usesIndoorPlan),
         routeLogic: sanitizeUserFacingDescription(composeScenarioRouteLogic(averageDistance, route, optimized.metrics.summary)),
-        blocks,
+        blocks: contextualBlocks,
         alternatives: [
           ...scenarioAlternatives(discoveryPlaces(discovery)),
           ...scenarioAlternatives(mustSeeHints),
@@ -820,13 +918,62 @@ const buildStageResult = (
   bundledPlaces: Array<{ kind: CandidateKind; places: PlaceSnapshot[] }>,
   discovery: DestinationDiscovery,
   groundedPlaces: PlaceSnapshot[],
+  spendTier?: RightNowSpendTier,
 ): LocalSearchStageResult => ({
   groundedPlaces: uniquePlaces(groundedPlaces).slice(0, 24),
-  rankedPools: buildCandidatePools(point, vibe, bundledPlaces, discovery),
+  rankedPools: buildCandidatePools(point, vibe, bundledPlaces, discovery, spendTier),
 });
 
 export const localScenarioService = {
   generateScenarios: async (request: LocalScenarioRequest, hooks?: LocalScenarioGenerationHooks): Promise<GeneratedLocalScenarios> => {
+    let musicPlanningSignals: MusicPlanningSignals | null = null;
+    if (request.userId?.trim()) {
+      try {
+        const mp = await getEnabledMusicPersonalization(request.userId);
+        const v = request.vibe.toLowerCase();
+        const compatible =
+          v.includes("night") ||
+          v.includes("culture") ||
+          v.includes("bar") ||
+          v.includes("live") ||
+          v.includes("food") ||
+          v.includes("social") ||
+          v.includes("rest") ||
+          v.includes("date");
+        if (compatible && mp.profile && mp.settings.useMusicTastePersonalization) {
+          musicPlanningSignals = await buildMusicPlanningSignals(
+            mp.profile,
+            mp.planningConfidence,
+            mp.settings.allowAiMusicInterpretation,
+          );
+        }
+      } catch {
+        /* optional */
+      }
+    }
+    const planningContext = buildPlanningContext({
+      userPreferences: request.userPreferences,
+      travelMemories: request.travelMemories,
+      placeMemories: request.placeMemories,
+      draft: {
+        preferences: {
+          partyComposition: "solo",
+          vibe: [request.vibe],
+          foodInterests: request.userPreferences?.foodInterests ?? [],
+          walkingTolerance: request.userPreferences?.walkingTolerance ?? "medium",
+          pace: request.userPreferences?.preferredPace ?? "balanced",
+          avoids: request.userPreferences?.avoids ?? [],
+          mustSeeNotes: "",
+          specialWishes: "",
+        },
+        budget: {
+          amount: 0,
+          style: "balanced",
+          currency: request.userPreferences?.currency ?? "EUR",
+        },
+      },
+      musicPlanningSignals,
+    });
     hooks?.onStep?.("locating_precisely");
     const point = request.latitude !== undefined && request.longitude !== undefined
       ? { latitude: request.latitude, longitude: request.longitude, label: request.locationLabel }
@@ -837,7 +984,8 @@ export const localScenarioService = {
     const localArea = parseLocationContext(point.label, request.availableMinutes);
 
     hooks?.onStep?.("finding_nearby_places");
-    const categoryBundles = categoryBundlesForVibe(request.vibe);
+    const spendTier = request.rightNowSpendTier ?? "flexible";
+    const categoryBundles = categoryBundlesForVibe(request.vibe, spendTier);
     const discovery = await publicDiscoveryProvider.getDestinationDiscovery({
       locationLabel: point.label,
       segments: [{ city: point.label.split(",")[0] ?? point.label, country: point.label.split(",")[1]?.trim() ?? "" }],
@@ -860,6 +1008,7 @@ export const localScenarioService = {
         ...strictBundledPlaces.flatMap((bundle) => bundle.places),
         ...strictDiscoveryPlaces,
       ],
+      spendTier,
     );
 
     const relaxedBundledPlaces = strictStage.groundedPlaces.length > 0
@@ -885,6 +1034,7 @@ export const localScenarioService = {
           ...relaxedBundledPlaces.flatMap((bundle) => bundle.places),
           ...relaxedDiscoveryPlaces,
         ],
+        spendTier,
       );
 
     const discoveryFallbackPlaces = relaxedStage.groundedPlaces.length > 0
@@ -898,6 +1048,7 @@ export const localScenarioService = {
         categoryBundles.map((bundle) => ({ kind: bundle.kind, places: [] })),
         discovery,
         discoveryFallbackPlaces,
+        spendTier,
       );
 
     const groundedStage = strictStage.groundedPlaces.length > 0
@@ -908,16 +1059,39 @@ export const localScenarioService = {
     const groundedPlaces = groundedStage.groundedPlaces;
     const activeRadiusMeters = strictStage.groundedPlaces.length > 0 ? localArea.strictRadiusMeters : localArea.relaxedRadiusMeters;
 
+    if (groundedPlaces.length === 0) {
+      throw new NotEnoughGroundedDataError("No grounded places near this location after discovery and search.", {
+        flow: "local_scenario",
+        providerName: "publicPlacesProvider|publicDiscoveryProvider",
+      });
+    }
+
     hooks?.onStep?.("estimating_movement");
     const route = groundedPlaces.length > 1
       ? await publicRoutingProvider.estimateRoute(groundedPlaces.slice(0, 5)).catch(() => fallbackRoute(groundedPlaces.length))
       : fallbackRoute(groundedPlaces.length);
-    const prompt = buildLocalScenarioPrompt(point.label, request.vibe, request.availableMinutes, weather, activeRadiusMeters);
+    const clock = dayjs();
+    const timeContext: LocalScenarioTimeContext = {
+      hour: clock.hour(),
+      weekday: clock.day(),
+      spendTier,
+    };
+    const exploreSpeed = resolveExploreSpeed(request.userPreferences);
+    const prompt = buildLocalScenarioPrompt(
+      point.label,
+      request.vibe,
+      request.availableMinutes,
+      weather,
+      activeRadiusMeters,
+      planningContext,
+      timeContext,
+      exploreSpeed,
+    );
     const allowFoodCrawl = detectFoodCrawlIntent(request.vibe);
 
     hooks?.onStep?.("composing_scenarios");
     const localEngineScenarioList = groundedPlaces.length > 0
-      ? await attachMovementLegs(buildRankedScenarios(request, point, localArea, weather, groundedStage.rankedPools, route, discovery))
+      ? await attachMovementLegs(buildRankedScenarios(request, point, localArea, weather, groundedStage.rankedPools, route, discovery, planningContext))
       : [];
     const localEngineScenarios = generatedLocalScenariosSchema.parse({ scenarios: localEngineScenarioList });
     const emitBatches = async (scenarios: GeneratedLocalScenarios["scenarios"], total: number): Promise<void> => {
@@ -933,10 +1107,6 @@ export const localScenarioService = {
 
     await emitBatches(localEngineScenarios.scenarios, localEngineScenarios.scenarios.length);
 
-    if (groundedPlaces.length === 0) {
-      return generatedLocalScenariosSchema.parse({ scenarios: [] });
-    }
-
     try {
       hooks?.onStep?.("refining_with_ai");
       const aiResult = await openAiGatewayClient.generateLocalScenarios({
@@ -948,6 +1118,7 @@ export const localScenarioService = {
         prompt,
       });
 
+      hooks?.onStep?.("polishing_itinerary");
       const merged = uniqueScenarios([...localEngineScenarios.scenarios, ...aiResult.scenarios])
         .map((scenario) => {
           const scenarioDateValue = dayjs().format("YYYY-MM-DD");
@@ -988,8 +1159,9 @@ export const localScenarioService = {
       }
 
       return generatedLocalScenariosSchema.parse({ scenarios: enrichedMerged });
-    } catch {
-      return localEngineScenarios;
+    } catch (error) {
+      debugLogError("local_scenario_ai_refinement", error);
+      throw error;
     }
   },
 };

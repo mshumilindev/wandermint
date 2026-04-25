@@ -10,6 +10,15 @@ interface ImportMetaEnv {
   readonly VITE_FIREBASE_APP_ID?: string;
   readonly VITE_FIREBASE_MEASUREMENT_ID?: string;
   readonly VITE_AI_GATEWAY_URL?: string;
+  readonly VITE_MEDIA_API_URL?: string;
+  /** Base URL for event search API (default `/api/events`). */
+  readonly VITE_EVENTS_API_URL?: string;
+  readonly VITE_SPOTIFY_CLIENT_ID?: string;
+  readonly VITE_SPOTIFY_REDIRECT_URI?: string;
+  readonly VITE_TICKETMASTER_API_KEY?: string;
+  readonly VITE_APPLE_MUSIC_DEVELOPER_TOKEN?: string;
+  readonly VITE_APPLE_MUSIC_TEAM_ID?: string;
+  readonly VITE_MUSIC_AI_ENABLED?: string;
 }
 
 interface ImportMeta {

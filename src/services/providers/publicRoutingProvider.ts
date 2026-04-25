@@ -1,37 +1,15 @@
-import { z } from "zod";
 import type { MovementLeg, MovementOption, PlaceSnapshot } from "../../entities/activity/model";
 import { createClientId } from "../../shared/lib/id";
+import { haversineDistanceKm, resolveTransportTime } from "../../features/transport/transportTimeResolver";
 import type { RouteContext, RoutingProvider } from "./contracts";
 import { pricingService } from "../pricing/pricingService";
 
-const toRadians = (degrees: number): number => (degrees * Math.PI) / 180;
-
-const distanceKm = (from: PlaceSnapshot, to: PlaceSnapshot): number => {
-  if (from.latitude === undefined || from.longitude === undefined || to.latitude === undefined || to.longitude === undefined) {
-    return 0;
-  }
-
-  const earthRadiusKm = 6371;
-  const dLat = toRadians(to.latitude - from.latitude);
-  const dLon = toRadians(to.longitude - from.longitude);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRadians(from.latitude)) * Math.cos(toRadians(to.latitude)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-
-  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
-const osrmRouteSchema = z.object({
-  code: z.string(),
-  routes: z.array(
-    z.object({
-      distance: z.number(),
-      duration: z.number(),
-    }),
-  ),
-});
-
 const hasCoordinates = (place: PlaceSnapshot): boolean => place.latitude !== undefined && place.longitude !== undefined;
+
+const placeToPoint = (place: PlaceSnapshot): { lat: number; lng: number } => ({
+  lat: place.latitude as number,
+  lng: place.longitude as number,
+});
 
 const formatModeLabel = (mode: MovementOption["mode"]): string => {
   if (mode === "walking") {
@@ -43,117 +21,67 @@ const formatModeLabel = (mode: MovementOption["mode"]): string => {
   return "Taxi";
 };
 
-const fallbackMovement = (from: PlaceSnapshot, to: PlaceSnapshot): MovementLeg => {
-  const crowKm = distanceKm(from, to);
-  const walkingMinutes = Math.max(8, Math.round((crowKm / 4.6) * 60));
-  const primary: MovementOption =
-    walkingMinutes <= 24
-      ? { mode: "walking", durationMinutes: walkingMinutes, certainty: "partial", sourceName: "Distance estimate" }
-      : {
-          mode: "public_transport",
-          durationMinutes: Math.max(12, Math.round(walkingMinutes * 0.5)),
-          estimatedCost: pricingService.estimateMovementCost({
-            mode: "public_transport",
-            distanceKm: crowKm,
-            city: from.city ?? to.city,
-            country: from.country ?? to.country,
-            place: from,
-          }),
-          certainty: "partial",
-          sourceName: "Distance estimate",
-        };
-
-  return {
-    id: createClientId("move"),
-    fromBlockId: "",
-    toBlockId: "",
-    summary:
-      primary.mode === "walking"
-        ? `Walk about ${primary.durationMinutes} min`
-        : `Transit about ${primary.durationMinutes} min`,
-    distanceMeters: Math.round(crowKm * 1000),
-    primary,
-    alternatives: [],
-  };
-};
-const fetchOsrmRoute = async (
-  profile: "foot" | "driving",
-  from: PlaceSnapshot,
-  to: PlaceSnapshot,
-): Promise<{ distanceMeters: number; durationMinutes: number } | null> => {
+const distanceKm = (from: PlaceSnapshot, to: PlaceSnapshot): number => {
   if (!hasCoordinates(from) || !hasCoordinates(to)) {
-    return null;
+    return 0;
   }
-
-  const url = `https://router.project-osrm.org/route/v1/${profile}/${from.longitude},${from.latitude};${to.longitude},${to.latitude}?overview=false`;
-  const response = await fetch(url);
-  if (!response.ok) {
-    return null;
-  }
-
-  const parsed = osrmRouteSchema.safeParse(await response.json());
-  if (!parsed.success || parsed.data.routes.length === 0) {
-    return null;
-  }
-
-  return {
-    distanceMeters: Math.round(parsed.data.routes[0]?.distance ?? 0),
-    durationMinutes: Math.max(1, Math.round((parsed.data.routes[0]?.duration ?? 0) / 60)),
-  };
+  return haversineDistanceKm(placeToPoint(from), placeToPoint(to));
 };
 
-const buildMovementOptions = (
-  walkingRoute: { distanceMeters: number; durationMinutes: number } | null,
-  drivingRoute: { distanceMeters: number; durationMinutes: number } | null,
+const resultToOption = (
+  mode: MovementOption["mode"],
+  result: Awaited<ReturnType<typeof resolveTransportTime>>,
+  distanceKmValue: number,
   from: PlaceSnapshot,
   to: PlaceSnapshot,
-): MovementLeg => {
-  const fallback = fallbackMovement(from, to);
-  const baseDistanceMeters = walkingRoute?.distanceMeters ?? drivingRoute?.distanceMeters ?? fallback.distanceMeters ?? 0;
-  const walkingMinutes = walkingRoute?.durationMinutes ?? fallback.primary.durationMinutes;
-  const taxiMinutes = drivingRoute?.durationMinutes ?? Math.max(6, Math.round(walkingMinutes * 0.42));
-  const transitMinutes = Math.max(10, Math.round((drivingRoute?.durationMinutes ?? taxiMinutes) * 1.8 + 4));
+  sourceLabel: string,
+): MovementOption => ({
+  mode,
+  durationMinutes: result.durationMinutes,
+  estimatedCost: pricingService.estimateMovementCost({
+    mode,
+    distanceKm: distanceKmValue,
+    durationMinutes: result.durationMinutes,
+    city: from.city ?? to.city,
+    country: from.country ?? to.country,
+    place: from,
+  }),
+  certainty: result.confidence === "high" && result.source === "maps_api" ? "live" : "partial",
+  sourceName: sourceLabel,
+  estimateConfidence: result.confidence,
+});
+
+const buildMovementOptions = async (from: PlaceSnapshot, to: PlaceSnapshot): Promise<MovementLeg> => {
+  const fromPt = placeToPoint(from);
+  const toPt = placeToPoint(to);
+
+  const [walkingR, drivingR, transitR] = await Promise.all([
+    resolveTransportTime({ from: fromPt, to: toPt, mode: "walking" }),
+    resolveTransportTime({ from: fromPt, to: toPt, mode: "driving" }),
+    resolveTransportTime({ from: fromPt, to: toPt, mode: "transit" }),
+  ]);
+
+  const baseDistanceMeters =
+    walkingR.distanceMeters ?? drivingR.distanceMeters ?? Math.round(haversineDistanceKm(fromPt, toPt) * 1000);
   const distanceKmValue = baseDistanceMeters / 1000;
 
-  const walkingOption: MovementOption = {
-    mode: "walking",
-    durationMinutes: walkingMinutes,
-    estimatedCost: pricingService.estimateMovementCost({
-      mode: "walking",
-      distanceKm: distanceKmValue,
-      city: from.city ?? to.city,
-      country: from.country ?? to.country,
-      place: from,
-    }),
-    certainty: walkingRoute ? "live" : "partial",
-    sourceName: walkingRoute ? "OSRM walking route" : "Distance estimate",
-  };
-  const transitOption: MovementOption = {
-    mode: "public_transport",
-    durationMinutes: transitMinutes,
-    estimatedCost: pricingService.estimateMovementCost({
-      mode: "public_transport",
-      distanceKm: distanceKmValue,
-      city: from.city ?? to.city,
-      country: from.country ?? to.country,
-      place: from,
-    }),
-    certainty: drivingRoute ? "partial" : "partial",
-    sourceName: drivingRoute ? "OSRM road route with city transit estimate" : "Distance estimate",
-  };
-  const taxiOption: MovementOption = {
-    mode: "taxi",
-    durationMinutes: taxiMinutes,
-    estimatedCost: pricingService.estimateMovementCost({
-      mode: "taxi",
-      distanceKm: distanceKmValue,
-      city: from.city ?? to.city,
-      country: from.country ?? to.country,
-      place: from,
-    }),
-    certainty: drivingRoute ? "live" : "partial",
-    sourceName: drivingRoute ? "OSRM driving route" : "Distance estimate",
-  };
+  const walkingSource =
+    walkingR.source === "maps_api" ? "OSRM walking route" : walkingR.source === "cached" ? "OSRM walking route (cached)" : "Route estimate";
+  const drivingSource =
+    drivingR.source === "maps_api" ? "OSRM driving route" : drivingR.source === "cached" ? "OSRM driving route (cached)" : "Route estimate";
+  const transitSource =
+    transitR.source === "maps_api"
+      ? "OSRM road route with city transit estimate"
+      : transitR.source === "cached"
+        ? "Transit estimate (cached)"
+        : "Route estimate";
+
+  const taxiMinutes = drivingR.durationMinutes;
+  const walkingOption = resultToOption("walking", walkingR, distanceKmValue, from, to, walkingSource);
+  const transitOption = resultToOption("public_transport", transitR, distanceKmValue, from, to, transitSource);
+  const taxiOption = resultToOption("taxi", { ...drivingR, durationMinutes: taxiMinutes }, distanceKmValue, from, to, drivingSource);
+
+  const walkingMinutes = walkingR.durationMinutes;
 
   const primary =
     walkingMinutes <= 18
@@ -184,9 +112,27 @@ const buildMovementOptions = (
 
 export const publicRoutingProvider: RoutingProvider = {
   estimateRoute: async (places) => {
-    const walkingKm = places.slice(1).reduce((total, place, index) => total + distanceKm(places[index] as PlaceSnapshot, place), 0);
-    const walkingMinutes = Math.max(8, Math.round((walkingKm / 4.5) * 60));
-    const certainty: RouteContext["certainty"] = places.every((place) => place.latitude !== undefined && place.longitude !== undefined) ? "partial" : "partial";
+    let walkingMinutes = 8;
+    if (places.length >= 2 && places.every((place) => hasCoordinates(place as PlaceSnapshot))) {
+      let total = 0;
+      for (let index = 0; index < places.length - 1; index += 1) {
+        const a = places[index] as PlaceSnapshot;
+        const b = places[index + 1] as PlaceSnapshot;
+        const r = await resolveTransportTime({
+          from: placeToPoint(a),
+          to: placeToPoint(b),
+          mode: "walking",
+        });
+        total += r.durationMinutes;
+      }
+      walkingMinutes = Math.max(8, total);
+    } else {
+      const walkingKm = places.slice(1).reduce((total, place, index) => total + distanceKm(places[index] as PlaceSnapshot, place as PlaceSnapshot), 0);
+      walkingMinutes = Math.max(8, Math.round((walkingKm / 5) * 60));
+    }
+    const certainty: RouteContext["certainty"] = places.every((place) => place.latitude !== undefined && place.longitude !== undefined)
+      ? "partial"
+      : "partial";
 
     return {
       summary:
@@ -198,12 +144,7 @@ export const publicRoutingProvider: RoutingProvider = {
     };
   },
   estimateMovement: async (from, to) => {
-    const [walkingRoute, drivingRoute] = await Promise.all([
-      fetchOsrmRoute("foot", from, to).catch(() => null),
-      fetchOsrmRoute("driving", from, to).catch(() => null),
-    ]);
-
-    const leg = buildMovementOptions(walkingRoute, drivingRoute, from, to);
+    const leg = await buildMovementOptions(from, to);
     return {
       ...leg,
       fromBlockId: "",

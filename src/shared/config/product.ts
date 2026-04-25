@@ -21,6 +21,8 @@ export const firestoreCollections = {
   tripChatMessages: "tripChatMessages",
   savedLocalScenarios: "savedLocalScenarios",
   userPreferences: "userPreferences",
+  privacySettings: "privacySettings",
+  tripReviews: "tripReviews",
   validationSnapshots: "validationSnapshots",
   completionHistory: "completionHistory",
   travelMemories: "travelMemories",

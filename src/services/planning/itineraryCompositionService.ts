@@ -1,4 +1,10 @@
 import type { ActivityBlock, PlaceSnapshot } from "../../entities/activity/model";
+import type { TravelTasteProfile } from "../../features/user-taste/travelTaste.types";
+import {
+  defaultTasteExplorationMix,
+  isTasteExplorationCategory,
+  tasteTransitionCostDelta,
+} from "../../features/user-taste/travelTasteCalculator";
 
 export type ItineraryCategory =
   | "food"
@@ -18,10 +24,14 @@ interface RoutePoint {
   longitude: number;
 }
 
-interface OptimizeItineraryOptions {
+export interface OptimizeItineraryOptions {
   origin?: RoutePoint;
   allowFoodCrawl?: boolean;
   preserveAnchors?: boolean;
+  /** Personal taste — adjusts stop ordering only; orthogonal to travel-behavior pacing metrics. */
+  travelTasteProfile?: TravelTasteProfile | null;
+  /** Target share of reorder picks that skew toward low-confidence categories (min ~20% when taste is active). */
+  tasteExplorationMix?: number;
 }
 
 export interface ItineraryCompositionMetrics {
@@ -175,6 +185,7 @@ const transitionPenalty = (
   origin: RoutePoint | undefined,
   allowFoodCrawl: boolean,
   seenCategories: Set<ItineraryCategory>,
+  travelTasteProfile?: TravelTasteProfile | null,
 ): number => {
   const category = normalizeItineraryCategory(candidate);
   const lastBlock = previousBlocks.length > 0 ? previousBlocks[previousBlocks.length - 1] : undefined;
@@ -231,6 +242,8 @@ const transitionPenalty = (
     }
   }
 
+  penalty += tasteTransitionCostDelta(category, travelTasteProfile);
+
   return penalty;
 };
 
@@ -240,39 +253,70 @@ const reorderWindow = (
   endPoint: RoutePoint | undefined,
   allowFoodCrawl: boolean,
   origin: RoutePoint | undefined,
+  options: OptimizeItineraryOptions,
 ): ActivityBlock[] => {
   if (windowBlocks.length < 2) {
     return windowBlocks;
   }
 
+  const tasteProfile = options.travelTasteProfile ?? null;
+  const explorationMix = Math.max(defaultTasteExplorationMix, options.tasteExplorationMix ?? defaultTasteExplorationMix);
+  const explorationQuota = tasteProfile && tasteProfile.confidence >= 0.08 ? Math.ceil(windowBlocks.length * explorationMix) : 0;
+
   const remaining = [...windowBlocks];
   const ordered: ActivityBlock[] = [];
   const seenCategories = new Set<ItineraryCategory>();
   let currentPoint = startPoint;
+  let explorationPicked = 0;
+
+  const costFor = (candidate: ActivityBlock): number => {
+    if (currentPoint || endPoint) {
+      return transitionPenalty(ordered, candidate, currentPoint, endPoint, origin, allowFoodCrawl, seenCategories, tasteProfile);
+    }
+    return (
+      averageDistanceToOtherPoints(candidate, remaining) +
+      transitionPenalty(ordered, candidate, undefined, endPoint, origin, allowFoodCrawl, seenCategories, tasteProfile)
+    );
+  };
 
   while (remaining.length > 0) {
-    const nextIndex = remaining.reduce<number>((bestIndex, candidate, index) => {
-      const bestCandidate = remaining[bestIndex];
-      if (!bestCandidate) {
-        return index;
+    const positionsLeft = remaining.length;
+    const explorationDebt = explorationQuota - explorationPicked;
+    const mustPickExploration = explorationDebt > 0 && explorationDebt === positionsLeft;
+
+    const scored = remaining.map((candidate, index) => {
+      const category = normalizeItineraryCategory(candidate);
+      return {
+        index,
+        candidate,
+        total: costFor(candidate),
+        exploration: isTasteExplorationCategory(category, tasteProfile),
+      };
+    });
+
+    let pool = scored;
+    if (mustPickExploration) {
+      const explorationRows = scored.filter((row) => row.exploration);
+      if (explorationRows.length > 0) {
+        pool = explorationRows;
       }
-      const baselineCost =
-        currentPoint || endPoint
-          ? transitionPenalty(ordered, candidate, currentPoint, endPoint, origin, allowFoodCrawl, seenCategories)
-          : averageDistanceToOtherPoints(candidate, remaining) +
-            transitionPenalty(ordered, candidate, undefined, endPoint, origin, allowFoodCrawl, seenCategories);
-      const bestCost =
-        currentPoint || endPoint
-          ? transitionPenalty(ordered, bestCandidate, currentPoint, endPoint, origin, allowFoodCrawl, seenCategories)
-          : averageDistanceToOtherPoints(bestCandidate, remaining) +
-            transitionPenalty(ordered, bestCandidate, undefined, endPoint, origin, allowFoodCrawl, seenCategories);
+    } else if (explorationDebt > 0 && tasteProfile) {
+      const minTotal = Math.min(...scored.map((row) => row.total));
+      const bestExploration = scored
+        .filter((row) => row.exploration)
+        .sort((left, right) => left.total - right.total)[0];
+      if (bestExploration && bestExploration.total <= minTotal + 420) {
+        pool = [bestExploration];
+      }
+    }
 
-      return baselineCost < bestCost ? index : bestIndex;
-    }, 0);
-
-    const [nextBlock] = remaining.splice(nextIndex, 1);
+    const bestRow = pool.reduce((best, row) => (row.total < best.total ? row : best));
+    const [nextBlock] = remaining.splice(bestRow.index, 1);
     if (!nextBlock) {
       break;
+    }
+    if (isTasteExplorationCategory(normalizeItineraryCategory(nextBlock), tasteProfile)) {
+      explorationPicked += 1;
     }
     ordered.push(nextBlock);
     seenCategories.add(normalizeItineraryCategory(nextBlock));
@@ -418,7 +462,7 @@ export const optimizeItineraryBlocks = (
     const slice = orderedBlocks.slice(sliceStart, sliceEnd);
     const anchorBlock = anchorIndex < orderedBlocks.length ? orderedBlocks[anchorIndex] : undefined;
     const endPoint = anchorBlock ? blockPoint(anchorBlock) ?? undefined : undefined;
-    const reorderedSlice = reorderWindow(slice, referencePoint, endPoint, allowFoodCrawl, options.origin);
+    const reorderedSlice = reorderWindow(slice, referencePoint, endPoint, allowFoodCrawl, options.origin, options);
     orderedBlocks.splice(sliceStart, slice.length, ...reorderedSlice);
 
     if (anchorBlock) {

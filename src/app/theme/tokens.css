@@ -43,6 +43,18 @@
   --wm-radius-lg: 18px;
   --wm-blur-panel: blur(18px) saturate(138%);
   --wm-blur-header: blur(24px) saturate(145%);
+
+  /* Travel style system (used only via travelStyleConfig + CSS vars) */
+  --wm-travel-style-text: #f3efe7;
+  --wm-travel-style-icon: rgba(255, 255, 255, 0.92);
+  --wm-deep-purple: #c9b8ff;
+  --wm-space-orange-rgb: 245, 138, 44;
+  /* Aliases for journey / film UI */
+  --space-orange: rgb(var(--wm-space-orange-rgb));
+  --deep-purple: var(--wm-deep-purple);
+  --wm-travel-nightlife-pink: #ff7ee0;
+  --wm-travel-nature-mint: #00d4a3;
+  --wm-travel-rest-blue: #7ab8ff;
 }
 
 * {

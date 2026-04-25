@@ -8,7 +8,9 @@ import type { Trip } from "../../../entities/trip/model";
 import { intercityTransportService } from "../../../services/travel-intelligence/intercityTransportService";
 import { createClientId } from "../../../shared/lib/id";
 import { ConfirmActionDialog } from "../../../shared/ui/ConfirmActionDialog";
+import { shiftTripLikeDateRange } from "../../../services/planning/timing/travelTimingService";
 import { LocationAutocompleteField } from "../../../shared/ui/LocationAutocompleteField";
+import { TravelTimingWarningBanner } from "./TravelTimingWarningBanner";
 
 interface TripEditPanelProps {
   trip: Trip;
@@ -137,6 +139,15 @@ export const TripEditPanel = ({ trip, open, onClose, onSave }: TripEditPanelProp
       <DialogTitle>{t("editTrip.title")}</DialogTitle>
       <DialogContent sx={{ display: "grid", gap: 2.5, pt: 1 }}>
         {error ? <Alert severity="warning">{error}</Alert> : null}
+        <TravelTimingWarningBanner
+          country={draft.tripSegments[0]?.country ?? ""}
+          city={draft.tripSegments[0]?.city}
+          destinationLabel={draft.destination}
+          dateRange={draft.dateRange}
+          onApplyDateRange={(range) => {
+            setDraft((current) => shiftTripLikeDateRange(current, range));
+          }}
+        />
         <Grid container spacing={2}>
           <Grid item xs={12} md={8}>
             <TextField fullWidth label={t("editTrip.tripTitle")} value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} />

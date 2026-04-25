@@ -31,7 +31,7 @@ export const pricingProfiles: PricingProfile[] = [
     museum: { lean: [12, 20], balanced: [20, 40], premium: [40, 70] },
     attraction: { lean: [0, 24], balanced: [18, 50], premium: [50, 95] },
     cinema: { lean: [18, 24], balanced: [24, 38], premium: [38, 60] },
-    localTransit: { lean: [4, 6], balanced: [6, 8], premium: [8, 12] },
+    localTransit: { lean: [4, 6], balanced: [5, 8], premium: [8, 12] },
     taxiBase: { lean: [10, 14], balanced: [14, 18], premium: [18, 24] },
     taxiPerKm: { lean: [2.4, 3], balanced: [3, 3.8], premium: [3.8, 5] },
     rest: { lean: [0, 0], balanced: [0, 12], premium: [12, 24] },

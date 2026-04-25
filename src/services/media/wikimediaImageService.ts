@@ -47,6 +47,7 @@ const buildCandidates = ({ title, locationHint, categoryHint }: ImageResolveInpu
     location ? { query: `${base}, ${location}`, strictLocation: true } : null,
     location ? { query: `${simplified}, ${location}`, strictLocation: true } : null,
     location && category ? { query: `${category} in ${location}`, strictLocation: true } : null,
+    simplified.length > 1 ? { query: simplified, strictLocation: false } : null,
     location ? { query: location, strictLocation: false } : null,
     category ? { query: `${category}`, strictLocation: false } : null,
     { query: base, strictLocation: false },
@@ -69,6 +70,7 @@ const fetchSummaryImage = async (title: string): Promise<WikimediaSummaryResult 
   }
 
   const data = (await response.json()) as WikimediaSummaryResponse;
+  /** Prefer full raster from REST summary when available — thumbnails are often ~320px and look soft on large cards. */
   const imageUrl = data.originalimage?.source ?? data.thumbnail?.source ?? null;
   if (!imageUrl) {
     return null;

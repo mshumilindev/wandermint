@@ -84,7 +84,7 @@ export const TripChatPage = (): JSX.Element => {
             </Typography>
           </GlassPanel>
           {warnings.slice(0, 3).map((warning) => (
-            <WarningCard key={warning.id} warning={warning} />
+            <WarningCard key={warning.id} warning={warning} softenPresentation />
           ))}
           {proposals.slice(0, 3).map((proposal) => (
             <ReplanProposalCard

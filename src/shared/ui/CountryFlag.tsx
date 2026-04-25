@@ -1,5 +1,16 @@
 import { Box } from "@mui/material";
 
+export const countryLabelToIsoCode = (country: string | undefined): string | undefined => {
+  if (!country?.trim()) {
+    return undefined;
+  }
+  const trimmed = country.trim();
+  if (trimmed.length === 2 && /^[a-z]{2}$/i.test(trimmed)) {
+    return trimmed.toUpperCase();
+  }
+  return countryToIso[trimmed.toLowerCase()];
+};
+
 const countryToIso: Record<string, string> = {
   poland: "PL",
   japan: "JP",
@@ -52,12 +63,15 @@ export const getCountryFlagEmoji = (country: string | undefined): string | null 
 
 export const CountryFlag = ({
   country,
+  countryCode,
   size = "1rem",
 }: {
   country?: string;
+  countryCode?: string;
   size?: string | number;
 }): JSX.Element | null => {
-  const flag = getCountryFlagEmoji(country);
+  const iso = countryCode?.trim().length === 2 ? countryCode.trim().toUpperCase() : countryLabelToIsoCode(country);
+  const flag = iso ? isoToFlagEmoji(iso) : getCountryFlagEmoji(country);
   if (!flag) {
     return null;
   }

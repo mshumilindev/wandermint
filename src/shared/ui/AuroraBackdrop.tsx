@@ -15,15 +15,17 @@ export const AuroraBackdrop = (): JSX.Element => {
       }}
     >
       <Box
+        component="img"
+        src={nightSkyBackground}
+        alt=""
         sx={{
           position: "absolute",
           inset: 0,
-          backgroundImage: `url(${nightSkyBackground})`,
-          backgroundPosition: "center center",
-          backgroundRepeat: "no-repeat",
-          backgroundSize: "cover",
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          objectPosition: "center center",
           opacity: 0.9,
-          transform: "scale(1.03)",
           filter: "saturate(0.82) brightness(0.52) contrast(1.04)",
         }}
       />
