@@ -126,15 +126,22 @@ export const scoreDestinationDateWindows = async (params: {
 };
 
 export const pickTopWindows = (
-  windows: ScoredDateWindow[],
+  windows: readonly ScoredDateWindow[],
+  durationDays: number,
 ): { balanced: ScoredDateWindow; cheapest: ScoredDateWindow; comfort: ScoredDateWindow } => {
   const sorted = [...windows].sort((a, b) => b.score - a.score);
+  const duration = Math.max(1, durationDays);
   if (sorted.length === 0) {
     const today = dayjs().startOf("day");
     const start = today.add(10, "day").format("YYYY-MM-DD");
-    const end = today.add(13, "day").format("YYYY-MM-DD");
-    const stub: ScoredDateWindow = { startDate: start, endDate: end, score: 0.4, reasonParts: ["fallback"] };
-    return { balanced: stub, cheapest: stub, comfort: stub };
+    const end = today.add(10 + duration - 1, "day").format("YYYY-MM-DD");
+    const neutral: ScoredDateWindow = {
+      startDate: start,
+      endDate: end,
+      score: 0.5,
+      reasonParts: ["Neutral calendar window (no scored date candidates)"],
+    };
+    return { balanced: neutral, cheapest: neutral, comfort: neutral };
   }
   const balanced = sorted[0]!;
   const cheapest = sorted[sorted.length - 1]!;

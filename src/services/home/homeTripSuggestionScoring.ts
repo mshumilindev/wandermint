@@ -13,7 +13,6 @@ export type CuratedDestinationSeed = {
   genreHints?: string[];
   budgetStyles: Array<"lean" | "balanced" | "premium">;
   defaultDurationDays: number;
-  dailySpendByStyle: { lean: number; balanced: number; premium: number };
 };
 
 /** Static catalogue — deterministic candidates only; copy is templated, not LLM-generated. */
@@ -27,7 +26,6 @@ export const CURATED_DESTINATION_SEEDS: CuratedDestinationSeed[] = [
     genreHints: ["indie", "folk", "alternative"],
     budgetStyles: ["lean", "balanced"],
     defaultDurationDays: 4,
-    dailySpendByStyle: { lean: 85, balanced: 140, premium: 260 },
   },
   {
     country: "Japan",
@@ -37,7 +35,6 @@ export const CURATED_DESTINATION_SEEDS: CuratedDestinationSeed[] = [
     genreHints: ["ambient", "classical", "jazz"],
     budgetStyles: ["balanced", "premium"],
     defaultDurationDays: 5,
-    dailySpendByStyle: { lean: 95, balanced: 160, premium: 320 },
   },
   {
     country: "Germany",
@@ -47,7 +44,6 @@ export const CURATED_DESTINATION_SEEDS: CuratedDestinationSeed[] = [
     sceneHints: ["club", "electronic"],
     budgetStyles: ["lean", "balanced"],
     defaultDurationDays: 4,
-    dailySpendByStyle: { lean: 75, balanced: 130, premium: 240 },
   },
   {
     country: "Mexico",
@@ -56,7 +52,6 @@ export const CURATED_DESTINATION_SEEDS: CuratedDestinationSeed[] = [
     seasonalMonths: [1, 2, 10, 11, 12],
     budgetStyles: ["lean", "balanced"],
     defaultDurationDays: 5,
-    dailySpendByStyle: { lean: 65, balanced: 110, premium: 200 },
   },
   {
     country: "Canada",
@@ -65,7 +60,6 @@ export const CURATED_DESTINATION_SEEDS: CuratedDestinationSeed[] = [
     genreHints: ["indie", "rock", "pop"],
     budgetStyles: ["balanced", "premium"],
     defaultDurationDays: 4,
-    dailySpendByStyle: { lean: 90, balanced: 150, premium: 280 },
   },
   {
     country: "Italy",
@@ -73,7 +67,6 @@ export const CURATED_DESTINATION_SEEDS: CuratedDestinationSeed[] = [
     tags: ["food", "coastal", "history"],
     budgetStyles: ["lean", "balanced"],
     defaultDurationDays: 5,
-    dailySpendByStyle: { lean: 80, balanced: 135, premium: 250 },
   },
   {
     country: "United States",
@@ -83,7 +76,6 @@ export const CURATED_DESTINATION_SEEDS: CuratedDestinationSeed[] = [
     sceneHints: ["live music", "jazz"],
     budgetStyles: ["balanced", "premium"],
     defaultDurationDays: 4,
-    dailySpendByStyle: { lean: 100, balanced: 175, premium: 320 },
   },
   {
     country: "United Kingdom",
@@ -92,7 +84,6 @@ export const CURATED_DESTINATION_SEEDS: CuratedDestinationSeed[] = [
     genreHints: ["indie", "rock", "alternative"],
     budgetStyles: ["lean", "balanced"],
     defaultDurationDays: 3,
-    dailySpendByStyle: { lean: 95, balanced: 155, premium: 270 },
   },
 ];
 
@@ -130,19 +121,15 @@ const budgetStyleOrDefault = (ctx: HomeSuggestionContext): "lean" | "balanced" |
   return "balanced";
 };
 
-const estimateBudget = (
-  ctx: HomeSuggestionContext,
-  seed: CuratedDestinationSeed,
-  durationDays: number,
-): SuggestedTripBudgetEstimate => {
-  const style = budgetStyleOrDefault(ctx);
-  const daily =
-    ctx.budget.avgDailySpend && ctx.budget.avgDailySpend > 0
-      ? ctx.budget.avgDailySpend
-      : seed.dailySpendByStyle[style];
-  const min = Math.round(daily * durationDays * 0.85);
-  const max = Math.round(daily * durationDays * 1.2);
-  return { min, max, currency: ctx.budget.currency };
+/** Aggregate trip budget hint from observed spend only — no invented destination price tables. */
+const estimateBudgetFromContext = (ctx: HomeSuggestionContext, durationDays: number): SuggestedTripBudgetEstimate => {
+  if (ctx.budget.avgDailySpend && ctx.budget.avgDailySpend > 0) {
+    const daily = ctx.budget.avgDailySpend;
+    const min = Math.round(daily * durationDays * 0.85);
+    const max = Math.round(daily * durationDays * 1.2);
+    return { min, max, currency: ctx.budget.currency };
+  }
+  return { min: 0, max: 0, currency: ctx.budget.currency };
 };
 
 const estimateBudgetForPlace = (ctx: HomeSuggestionContext, durationDays: number): SuggestedTripBudgetEstimate => {
@@ -154,8 +141,7 @@ const estimateBudgetForPlace = (ctx: HomeSuggestionContext, durationDays: number
       currency: ctx.budget.currency,
     };
   }
-  const seed = CURATED_DESTINATION_SEEDS.find((s) => s.country === "Portugal") ?? CURATED_DESTINATION_SEEDS[0]!;
-  return estimateBudget(ctx, seed, durationDays);
+  return estimateBudgetFromContext(ctx, durationDays);
 };
 
 const stableId = (kind: HomeTripSuggestionKind, country: string, city: string | undefined, salt: string): string => {
@@ -329,7 +315,7 @@ const pushSimilarAndNew = (ctx: HomeSuggestionContext, out: HomeTripSuggestionCa
     }
 
     const duration = seed.defaultDurationDays;
-    const budget = estimateBudget(ctx, seed, duration);
+    const budget = estimateBudgetFromContext(ctx, duration);
 
     if (inCountry) {
       const score =
@@ -366,7 +352,10 @@ const pushSimilarAndNew = (ctx: HomeSuggestionContext, out: HomeTripSuggestionCa
       destination: { city: seed.city, country: seed.country },
       durationDays: duration,
       estimatedBudget: budget,
-      reasoning: `New country for you, tuned to your typical ${style} spend band and pacing.`,
+      reasoning:
+        ctx.budget.avgDailySpend && ctx.budget.avgDailySpend > 0
+          ? `New country for you, tuned to your typical ${style} spend band and pacing.`
+          : `New country for you, scored from taste and seasonality — trip budget fills in once WanderMint has your spend signals.`,
       confidence: Math.min(1, explorationScore),
       sourceSignals: ["pattern:new_region", ...seed.tags.map((t) => `tag:${t}`)],
       score: Math.min(1, explorationScore),
@@ -390,7 +379,7 @@ const pushSeasonalEventVibe = (ctx: HomeSuggestionContext, out: HomeTripSuggesti
     const seasonal = scoreSeasonal(seed);
     if (seasonal > 0.85) {
       const duration = seed.defaultDurationDays;
-      const budget = estimateBudget(ctx, seed, duration);
+      const budget = estimateBudgetFromContext(ctx, duration);
       out.push({
         id: stableId("seasonal_opportunity", seed.country, seed.city, `${ctx.userId}-season`),
         type: "seasonal_opportunity",
@@ -408,7 +397,7 @@ const pushSeasonalEventVibe = (ctx: HomeSuggestionContext, out: HomeTripSuggesti
     const gScore = genreSceneMatchScore(ctx, seed);
     if (gScore > 0.55 && (ctx.music?.topGenres.length ?? 0) > 0) {
       const duration = Math.max(3, seed.defaultDurationDays - 1);
-      const budget = estimateBudget(ctx, seed, duration);
+      const budget = estimateBudgetFromContext(ctx, duration);
       out.push({
         id: stableId("event_driven", seed.country, seed.city, `${ctx.userId}-music`),
         type: "event_driven",
@@ -426,7 +415,7 @@ const pushSeasonalEventVibe = (ctx: HomeSuggestionContext, out: HomeTripSuggesti
     const v = flickSyncVibeScore(ctx, seed);
     if (v > 0.42 && ctx.flickSync.interestSignals.length > 0) {
       const duration = seed.defaultDurationDays;
-      const budget = estimateBudget(ctx, seed, duration);
+      const budget = estimateBudgetFromContext(ctx, duration);
       out.push({
         id: stableId("vibe_based", seed.country, seed.city, `${ctx.userId}-flick`),
         type: "vibe_based",
@@ -500,7 +489,7 @@ export const buildCuratedFallbackSuggestions = (currency = "USD"): HomeTripSugge
   const picks = CURATED_DESTINATION_SEEDS.slice(0, 4);
   return picks.map((seed, i) => {
     const duration = seed.defaultDurationDays;
-    const budget = estimateBudget(ctxStub, seed, duration);
+    const budget = estimateBudgetFromContext(ctxStub, duration);
     return {
       id: stableId("new_exploration", seed.country, seed.city, `fallback-${i}`),
       type: "new_exploration" as const,

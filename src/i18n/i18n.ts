@@ -242,6 +242,7 @@ const resources = {
         emptyTitle: "No friends yet",
         emptyBody: "Add people you travel and explore with.",
         locationSearchPlaceholder: "Search city, address, or place...",
+        locationSearchNoResults: "No matching places from map search. Try a fuller city name or check your connection.",
         fields: {
           name: "Name",
           location: "Location",

@@ -131,7 +131,7 @@ export const enrichHomeSuggestedTrip = async (trip: SuggestedTrip, ctx: HomeSugg
     longitude: destLng,
   });
 
-  const { balanced, cheapest, comfort } = pickTopWindows(scored);
+  const { balanced, cheapest, comfort } = pickTopWindows(scored, trip.durationDays);
 
   const foodStyle = foodStyleFromContext(ctx);
 

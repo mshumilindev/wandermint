@@ -189,6 +189,11 @@ export const FriendEditorDialog = ({ open, initialFriend, busy = false, onClose,
               </Typography>
             </Box>
           ) : null}
+          {!locationLoading && locationQuery.trim().length >= 2 && locationOptions.length === 0 && !selectedLocation ? (
+            <Typography variant="caption" color="text.secondary">
+              {t("friends.locationSearchNoResults")}
+            </Typography>
+          ) : null}
           {locationOptions.length > 0 ? (
             <Box sx={{ display: "grid", gap: 0.5, maxHeight: 180, overflowY: "auto", pr: 0.3 }}>
               {locationOptions.map((row) => {

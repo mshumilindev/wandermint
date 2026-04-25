@@ -27,7 +27,7 @@ export type LocationSearchResult = {
     lat: number;
     lng: number;
   };
-  provider: "existing" | "nominatim" | "mapbox" | "google" | "mock";
+  provider: "existing" | "nominatim" | "mapbox" | "google";
 };
 
 export type SearchLocationsParams = {

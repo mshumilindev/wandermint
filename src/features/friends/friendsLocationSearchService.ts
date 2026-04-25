@@ -40,24 +40,6 @@ const mapNominatimToResult = (item: NominatimItem): LocationSearchResult | null 
   };
 };
 
-const fallbackMockResults = (query: string): LocationSearchResult[] => {
-  const clean = query.trim();
-  if (!clean) {
-    return [];
-  }
-  return [
-    {
-      id: `mock:${clean}:1`,
-      label: `${clean}, City Center`,
-      city: clean,
-      country: undefined,
-      address: `${clean}, City Center`,
-      coordinates: { lat: 0, lng: 0 },
-      provider: "mock",
-    },
-  ];
-};
-
 export const friendsLocationSearchService = {
   searchLocations: async (params: SearchLocationsParams): Promise<LocationSearchResult[]> => {
     const query = params.query.trim();
@@ -103,6 +85,6 @@ export const friendsLocationSearchService = {
       // fall back below
     }
 
-    return fallbackMockResults(query).slice(0, limit);
+    return [];
   },
 };
